@@ -38,7 +38,7 @@ sudo bash setup-vps.sh poker.yourdomain.com
 
 ### Шаг 2. Добавьте секреты в GitHub репозиторий
 В настройках вашего репозитория на GitHub перейдите в **Settings → Secrets and variables → Actions → New repository secret** и добавьте:
-
+-
 | Секрет | Значение |
 | :--- | :--- |
 | `VPS_HOST` | IP-адрес или домен вашего VPS |
@@ -46,4 +46,4 @@ sudo bash setup-vps.sh poker.yourdomain.com
 | `VPS_SSH_KEY` | Приватный SSH-ключ (`~/.ssh/id_ed25519` или `id_rsa`), публичная часть которого добавлена в `~/.ssh/authorized_keys` на VPS |
 | `VPS_PORT` | Порт SSH (необязательно, по умолчанию `22`) |
 
-После этого каждый `git push origin main` будет автоматически проверять код тестами, собирать релизный бинарник и обновлять сервер за 1 секунду!
+После этого каждый `git push origin main` будет автоматически проверять код тестами, собирать релизный бинарник и обновлять сервер за 1 секунду! 
