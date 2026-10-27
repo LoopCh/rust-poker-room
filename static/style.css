@@ -1623,6 +1623,328 @@ input[type="number"]:focus,
     border-left-color: var(--accent-red);
 }
 
+/* РЕДАКТИРУЕМЫЙ НИК И СЧЕТЧИК 10 СЕКУНД НА МЕСТЕ ИГРОКА */
+.seat-name.editable-nick {
+    cursor: pointer;
+    padding: 1px 5px;
+    margin-left: -5px;
+    border-radius: 5px;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.seat-name.editable-nick:hover {
+    background: rgba(59, 130, 246, 0.22);
+    color: #93c5fd;
+}
+
+.seat-timer-countdown {
+    position: absolute;
+    top: -11px;
+    right: -8px;
+    background: linear-gradient(135deg, #ef4444, #b91c1c);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 900;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1.5px solid #fecaca;
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.85);
+    z-index: 15;
+    animation: urgentTimerPulse 0.55s ease-in-out infinite alternate;
+}
+
+@keyframes urgentTimerPulse {
+    from { transform: scale(1); }
+    to { transform: scale(1.14); }
+}
+
+/* ПАНЕЛЬ ПРЕДНАЖАТИЯ (ПРЕДХОД) */
+.pre-action-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    padding: 7px 12px;
+    border-radius: 12px;
+}
+
+.pre-action-title {
+    font-size: 11.5px;
+    font-weight: 800;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-right: 2px;
+}
+
+.btn-pre-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(30, 41, 59, 0.9);
+    border: 1.5px solid rgba(148, 163, 184, 0.28);
+    color: #e2e8f0;
+    padding: 7px 12px;
+    border-radius: 9px;
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.btn-pre-action:hover {
+    border-color: #60a5fa;
+    background: rgba(59, 130, 246, 0.16);
+}
+
+.btn-pre-action .pre-check-icon {
+    font-size: 13px;
+    color: #94a3b8;
+}
+
+.btn-pre-action.active {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(5, 150, 105, 0.36));
+    border-color: #10b981;
+    color: #ecfdf5;
+    box-shadow: 0 0 14px rgba(16, 185, 129, 0.4);
+}
+
+.btn-pre-action.active .pre-check-icon {
+    color: #34d399;
+}
+
+/* МОДАЛЬНОЕ ОКНО КАДРИРОВАНИЯ / МАСШТАБИРОВАНИЯ ФОТО */
+.modal-crop-card {
+    max-width: 460px;
+}
+
+.crop-hint {
+    font-size: 12.5px;
+    color: #94a3b8;
+    line-height: 1.4;
+}
+
+.crop-mode-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.crop-mode-row .btn.active {
+    background: rgba(59, 130, 246, 0.24);
+    border-color: #60a5fa;
+    color: #fff;
+}
+
+.crop-canvas-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #070b12;
+    border: 2px solid rgba(96, 165, 250, 0.4);
+    border-radius: 12px;
+    overflow: hidden;
+    width: 336px;
+    height: 252px;
+    margin: 0 auto;
+    cursor: grab;
+    touch-action: none;
+    box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8);
+}
+
+.crop-canvas-wrap:active {
+    cursor: grabbing;
+}
+
+#avatar-crop-canvas {
+    width: 336px;
+    height: 252px;
+    display: block;
+}
+
+.crop-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12.5px;
+    color: #cbd5e1;
+}
+
+#avatar-zoom-slider {
+    flex: 1;
+    accent-color: var(--accent-blue);
+}
+
+.crop-zoom-val {
+    min-width: 44px;
+    text-align: right;
+    font-weight: 700;
+    color: #93c5fd;
+}
+
+/* МОДАЛЬНОЕ ОКНО ПРОШЛОЙ РАЗДАЧИ */
+.modal-last-hand-card {
+    max-width: 720px;
+    max-height: 86vh;
+}
+
+.last-hand-body {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-right: 4px;
+}
+
+.lh-summary-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid var(--border-color);
+    padding: 10px 14px;
+    border-radius: 10px;
+}
+
+.lh-pot-badge {
+    font-size: 15px;
+    font-weight: 800;
+    color: #fbbf24;
+}
+
+.lh-winners-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.lh-winner-pill {
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid rgba(16, 185, 129, 0.5);
+    color: #6ee7b7;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    font-weight: 700;
+}
+
+.lh-board-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    background: radial-gradient(circle at center, rgba(16, 107, 70, 0.35), rgba(9, 15, 26, 0.85));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 12px;
+}
+
+.lh-board-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #94a3b8;
+    font-weight: 700;
+}
+
+.lh-board-cards {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    min-height: 62px;
+}
+
+.lh-players-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 10px;
+}
+
+.lh-player-card {
+    background: #0c1322;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.lh-player-card.is-winner {
+    border-color: rgba(16, 185, 129, 0.65);
+    background: linear-gradient(145deg, rgba(16, 185, 129, 0.12), #0c1322);
+}
+
+.lh-player-card.is-folded {
+    opacity: 0.72;
+}
+
+.lh-player-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.lh-player-cards-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.lh-player-hole {
+    display: flex;
+    gap: 4px;
+}
+
+.lh-player-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11.5px;
+    color: #cbd5e1;
+}
+
+.lh-combo-name {
+    color: #fde047;
+    font-weight: 700;
+}
+
+.lh-log-box {
+    background: #080c14;
+    border: 1px solid var(--border-color);
+    border-radius: 9px;
+    padding: 10px 12px;
+    max-height: 165px;
+    overflow-y: auto;
+    font-size: 12px;
+    color: #94a3b8;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* МОДАЛЬНОЕ ОКНО СМЕНЫ НИКА */
+.modal-nick-card {
+    max-width: 380px;
+}
+
+.nickname-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.nickname-form label {
+    font-size: 12.5px;
+    color: var(--text-muted);
+}
+
 @media (max-width: 960px) {
     .lobby-columns {
         grid-template-columns: 1fr;

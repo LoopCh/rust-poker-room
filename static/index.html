@@ -44,6 +44,67 @@
         </div>
     </div>
 
+    <!-- Модальное окно настройки и масштабирования фото профиля -->
+    <div id="avatar-crop-modal" class="modal-backdrop hidden">
+        <div class="modal-card modal-crop-card">
+            <div class="modal-header">
+                <h3>🖼 Настройка фото профиля</h3>
+                <button type="button" id="close-crop-modal-btn" class="btn btn-ghost btn-sm">✕ Закрыть</button>
+            </div>
+            <p class="crop-hint">Перетаскивайте фото мышкой или пальцем и крутите колесико для выбора нужного ракурса, либо нажмите «Вписать целиком», чтобы фото не обрезалось:</p>
+            <div class="crop-mode-row">
+                <button type="button" id="crop-fit-btn" class="btn btn-outline btn-sm active">🖼 Вписать целиком (без обрезки)</button>
+                <button type="button" id="crop-fill-btn" class="btn btn-outline btn-sm">⛶ Заполнить рамку</button>
+                <button type="button" id="crop-reset-btn" class="btn btn-ghost btn-sm">↺ По центру</button>
+            </div>
+            <div class="crop-canvas-wrap" id="crop-canvas-wrap">
+                <canvas id="avatar-crop-canvas" width="336" height="252"></canvas>
+            </div>
+            <div class="crop-slider-row">
+                <span>🔍 Масштаб:</span>
+                <input type="range" id="avatar-zoom-slider" min="100" max="320" step="2" value="100">
+                <span id="avatar-zoom-label" class="crop-zoom-val">100%</span>
+            </div>
+            <div class="modal-actions crop-modal-actions">
+                <button type="button" id="delete-current-avatar-btn" class="btn btn-danger btn-sm hidden">🗑 Удалить фото</button>
+                <div style="flex: 1;"></div>
+                <button type="button" id="cancel-crop-btn" class="btn btn-ghost btn-sm">Отмена</button>
+                <button type="button" id="save-crop-btn" class="btn btn-primary btn-sm">✅ Сохранить фото</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно просмотра прошлой раздачи -->
+    <div id="last-hand-modal" class="modal-backdrop hidden">
+        <div class="modal-card modal-last-hand-card">
+            <div class="modal-header">
+                <h3 id="last-hand-title">📜 Итоги прошлой раздачи</h3>
+                <button type="button" id="close-last-hand-btn" class="btn btn-ghost btn-sm">✕ Закрыть</button>
+            </div>
+            <div id="last-hand-body" class="last-hand-body">
+                <div class="empty-rooms">Ещё не сыграно ни одной раздачи за этим столом.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно быстрой смены ника в игре -->
+    <div id="nickname-modal" class="modal-backdrop hidden">
+        <div class="modal-card modal-nick-card">
+            <div class="modal-header">
+                <h3>✏️ Изменить ваш никнейм</h3>
+                <button type="button" id="close-nick-modal-btn" class="btn btn-ghost btn-sm">✕</button>
+            </div>
+            <form id="nickname-form" class="nickname-form">
+                <label for="nickname-modal-input">Новое имя за столом:</label>
+                <input type="text" id="nickname-modal-input" maxlength="20" placeholder="Введите ваш никнейм..." autocomplete="off">
+                <div class="modal-actions">
+                    <button type="button" id="cancel-nick-btn" class="btn btn-ghost btn-sm">Отмена</button>
+                    <button type="submit" class="btn btn-primary btn-sm">✅ Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- ЛОББИ -->
     <div id="lobby-screen" class="screen active">
         <div class="lobby-card">
@@ -131,6 +192,7 @@
                     <span id="room-level-timer" class="badge badge-timer hidden" title="Время до повышения блайндов и анте">⏱ 05:00</span>
                 </div>
                 <button id="copy-link-btn" class="btn btn-outline btn-sm" title="Скопировать прямую ссылку для друзей">🔗 Пригласить</button>
+                <button id="last-hand-btn" class="btn btn-media" title="Посмотреть итоги, общие карты, карманные карты игроков и ход прошлой раздачи">📜 Прошлая раздача</button>
                 <button id="kick-offline-btn" class="btn btn-ghost btn-sm hidden" title="Освободить места отключившихся игроков">🧹 Очистить оффлайн</button>
             </div>
 
@@ -247,6 +309,31 @@
                     <button type="button" class="emoji-btn" data-emoji="😂">😂</button>
                     <button type="button" class="emoji-btn" data-emoji="🍀">🍀</button>
                 </div>
+            </div>
+
+            <!-- Панель преднажатия (авто-хода), когда сейчас ход другого игрока -->
+            <div id="pre-action-bar" class="pre-action-bar hidden">
+                <span class="pre-action-title">⚡ Предход:</span>
+                <button type="button" id="pre-check-fold-btn" class="btn-pre-action" data-pre="check_fold" title="Если бесплатно — Чек, если кто-то поставил — Пас">
+                    <span class="pre-check-icon">☐</span>
+                    <span>Чек / Пас</span>
+                </button>
+                <button type="button" id="pre-check-btn" class="btn-pre-action" data-pre="check" title="Автоматически сказать Чек, если никто не повысит ставку">
+                    <span class="pre-check-icon">☐</span>
+                    <span>Чек</span>
+                </button>
+                <button type="button" id="pre-fold-btn" class="btn-pre-action" data-pre="fold" title="Сразу сбросить карты при наступлении вашего хода">
+                    <span class="pre-check-icon">☐</span>
+                    <span>Пас</span>
+                </button>
+                <button type="button" id="pre-call-exact-btn" class="btn-pre-action hidden" data-pre="call_exact" title="Уравнять текущую ставку (сбросится, если кто-то повысит ещё сильнее)">
+                    <span class="pre-check-icon">☐</span>
+                    <span id="pre-call-exact-label">Колл</span>
+                </button>
+                <button type="button" id="pre-call-any-btn" class="btn-pre-action" data-pre="call_any" title="Уравнять любую ставку при наступлении вашего хода">
+                    <span class="pre-check-icon">☐</span>
+                    <span>Колл любой</span>
+                </button>
             </div>
 
             <div id="action-controls" class="action-controls disabled">

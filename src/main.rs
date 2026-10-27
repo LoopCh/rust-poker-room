@@ -77,6 +77,9 @@ enum ClientWsMessage {
     UpdateAvatar {
         avatar_url: Option<String>,
     },
+    UpdateName {
+        name: String,
+    },
     MediaDiag {
         level: String,
         message: String,
@@ -267,7 +270,7 @@ async fn handle_socket(
     };
 
     let player_id = query.player_id.trim().to_string();
-    let player_name: String = if query.name.trim().is_empty() {
+    let mut player_name: String = if query.name.trim().is_empty() {
         "Игрок".to_string()
     } else {
         query.name.trim().chars().take(20).collect()
@@ -389,6 +392,18 @@ async fn handle_socket(
                     let mut room = room_handle.room.lock().await;
                     room.update_avatar(&player_id, avatar_url);
                     broadcast_room_state(&room, &room_handle.clients);
+                }
+                Ok(ClientWsMessage::UpdateName { name }) => {
+                    let mut room = room_handle.room.lock().await;
+                    match room.update_name(&player_id, name) {
+                        Ok(clean_name) => {
+                            player_name = clean_name;
+                            broadcast_room_state(&room, &room_handle.clients);
+                        }
+                        Err(err) => {
+                            send_error(&tx, &err);
+                        }
+                    }
                 }
                 Ok(ClientWsMessage::MediaDiag { level, message }) => {
                     let clean_msg: String = message.chars().take(300).collect();

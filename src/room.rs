@@ -190,6 +190,31 @@ pub struct PublicPlayerView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LastHandPlayerInfo {
+    pub id: String,
+    pub name: String,
+    pub seat: usize,
+    pub hole_cards: Vec<Card>,
+    pub hand_name: Option<String>,
+    pub total_bet: u64,
+    pub won_amount: u64,
+    pub chips_after: u64,
+    pub folded: bool,
+    pub all_in: bool,
+    pub last_action: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LastHandSummary {
+    pub hand_number: u64,
+    pub pot: u64,
+    pub community_cards: Vec<Card>,
+    pub winners: Vec<WinnerInfo>,
+    pub players: Vec<LastHandPlayerInfo>,
+    pub actions_log: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RoomStateView {
     pub room_id: String,
     pub room_name: String,
@@ -224,6 +249,7 @@ pub struct RoomStateView {
     pub winners: Vec<WinnerInfo>,
     pub hand_number: u64,
     pub log: Vec<String>,
+    pub last_hand_summary: Option<LastHandSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +305,8 @@ pub struct PokerRoom {
     pub voluntarily_revealed: HashSet<String>,
     pub hand_number: u64,
     pub log: Vec<String>,
+    pub current_hand_log: Vec<String>,
+    pub last_hand_summary: Option<LastHandSummary>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -340,6 +368,8 @@ impl PokerRoom {
             voluntarily_revealed: HashSet::new(),
             hand_number: 0,
             log: vec![format!("Стол создан: {}. Ожидание игроков...", mode_desc)],
+            current_hand_log: Vec::new(),
+            last_hand_summary: None,
         }
     }
 
@@ -359,7 +389,14 @@ impl PokerRoom {
     }
 
     pub fn push_log(&mut self, msg: impl Into<String>) {
-        self.log.push(msg.into());
+        let text = msg.into();
+        if self.hand_number > 0 {
+            self.current_hand_log.push(text.clone());
+            if self.current_hand_log.len() > 80 {
+                self.current_hand_log.remove(0);
+            }
+        }
+        self.log.push(text);
         if self.log.len() > 60 {
             self.log.remove(0);
         }
@@ -545,6 +582,7 @@ impl PokerRoom {
 
         self.voluntarily_revealed.insert(player_id.to_string());
         self.push_log(format!("👁 {} показывает свои карты столу: [{} {}]", name, c1, c2));
+        self.record_last_hand_summary();
         Ok(())
     }
 
@@ -822,6 +860,22 @@ impl PokerRoom {
         }
     }
 
+    pub fn update_name(&mut self, player_id: &str, new_name: String) -> Result<String, String> {
+        let clean: String = new_name.trim().chars().take(20).collect();
+        if clean.is_empty() {
+            return Err("Никнейм не может быть пустым".to_string());
+        }
+        let Some(p) = self.players.iter_mut().find(|p| p.id == player_id) else {
+            return Err("Игрок не найден за столом".to_string());
+        };
+        let old_name = p.name.clone();
+        if old_name != clean {
+            p.name = clean.clone();
+            self.push_log(format!("✏️ {} сменил ник на {}", old_name, clean));
+        }
+        Ok(clean)
+    }
+
     pub fn rebuy(&mut self, player_id: &str) -> Result<(), String> {
         if !matches!(self.stage, GameStage::Waiting | GameStage::Showdown) {
             return Err("Докупка фишек возможна только между раздачами".to_string());
@@ -867,6 +921,7 @@ impl PokerRoom {
         self.check_and_advance_blind_level();
 
         self.hand_number += 1;
+        self.current_hand_log.clear();
         self.stage = GameStage::Preflop;
         self.all_in_runout = false;
         self.runout_step_started_at = None;
@@ -1191,6 +1246,56 @@ impl PokerRoom {
         }
     }
 
+    fn record_last_hand_summary(&mut self) {
+        if self.hand_number == 0 {
+            return;
+        }
+        let players_info: Vec<LastHandPlayerInfo> = self
+            .players
+            .iter()
+            .filter(|p| p.hole_cards.len() == 2)
+            .map(|p| {
+                let hand_name = if let Some(eval) = self.revealed_hands.get(&p.id) {
+                    Some(eval.name.clone())
+                } else if p.hole_cards.len() == 2 && self.community_cards.len() >= 3 {
+                    let mut cards = self.community_cards.clone();
+                    cards.extend_from_slice(&p.hole_cards);
+                    Some(evaluate_hand(&cards).name)
+                } else {
+                    None
+                };
+                let won_amount: u64 = self
+                    .winners
+                    .iter()
+                    .filter(|w| w.player_id == p.id)
+                    .map(|w| w.amount)
+                    .sum();
+                LastHandPlayerInfo {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    seat: p.seat,
+                    hole_cards: p.hole_cards.clone(),
+                    hand_name,
+                    total_bet: p.total_bet_in_hand,
+                    won_amount,
+                    chips_after: p.chips,
+                    folded: p.folded,
+                    all_in: p.all_in,
+                    last_action: p.last_action.clone(),
+                }
+            })
+            .collect();
+
+        self.last_hand_summary = Some(LastHandSummary {
+            hand_number: self.hand_number,
+            pot: self.pot,
+            community_cards: self.community_cards.clone(),
+            winners: self.winners.clone(),
+            players: players_info,
+            actions_log: self.current_hand_log.clone(),
+        });
+    }
+
     fn finish_hand_cleanup(&mut self) {
         self.set_turn_seat(None);
         self.all_in_runout = false;
@@ -1200,6 +1305,7 @@ impl PokerRoom {
         for p in &mut self.players {
             p.bet_in_round = 0;
         }
+        self.record_last_hand_summary();
         self.players.retain(|p| !p.left_voluntarily);
         self.auto_kick_expired_offline_players();
         self.ensure_valid_host();
@@ -1593,6 +1699,7 @@ impl PokerRoom {
             winners: self.winners.clone(),
             hand_number: self.hand_number,
             log: self.log.clone(),
+            last_hand_summary: self.last_hand_summary.clone(),
         }
     }
 }
@@ -1952,5 +2059,42 @@ mod tests {
         // Clearing avatar works
         room.update_avatar("p1", None);
         assert!(room.view_for_player("p1").players[0].avatar_url.is_none());
+    }
+
+    #[test]
+    fn test_update_name_and_last_hand_summary() {
+        let mut room = PokerRoom::new("test".into(), "Nick & History Test".into(), 10, 20, 1000);
+        room.add_or_reconnect_player("p1".into(), "Alice".into())
+            .unwrap();
+        room.add_or_reconnect_player("p2".into(), "Bob".into())
+            .unwrap();
+
+        let new_nick = room.update_name("p1", "  Кирилл  ".into()).unwrap();
+        assert_eq!(new_nick, "Кирилл");
+        assert_eq!(room.view_for_player("p1").players[0].name, "Кирилл");
+        assert!(room.update_name("p1", "   ".into()).is_err());
+
+        assert!(room.view_for_player("p1").last_hand_summary.is_none());
+
+        room.start_new_hand().unwrap();
+        let turn_seat = room.current_turn_seat.unwrap();
+        let active_id = room
+            .players
+            .iter()
+            .find(|p| p.seat == turn_seat)
+            .unwrap()
+            .id
+            .clone();
+        room.handle_action(&active_id, PlayerAction::Fold).unwrap();
+
+        let summary = room
+            .view_for_player("p1")
+            .last_hand_summary
+            .expect("last_hand_summary should be recorded on hand finish");
+        assert_eq!(summary.hand_number, 1);
+        assert_eq!(summary.pot, 20);
+        assert_eq!(summary.players.len(), 2);
+        assert!(summary.players.iter().all(|p| p.hole_cards.len() == 2));
+        assert!(!summary.actions_log.is_empty());
     }
 }

@@ -20,7 +20,7 @@ let myAvatarUrl = localStorage.getItem(STORAGE_KEY_AVATAR) || null;
 let currentRoomId = null;
 let ws = null;
 let roomState = null;
-let lastLogCount = 0;
+let lastRenderedLogs = [];
 let intentionalLeave = false;
 
 // Отслеживание изменений для плавных анимаций, звуков и локальных таймеров
@@ -38,6 +38,12 @@ let clientStateReceivedAt = 0;
 let clientTurnInitialRem = 45;
 let clientNextHandInitialRem = null;
 let clientLevelInitialRem = null;
+let lastTimerSoundKey = "";
+
+// Преднажатие кнопок (предход)
+let selectedPreAction = null; // "check_fold" | "check" | "fold" | "call_exact" | "call_any" | null
+let preActionTargetBet = 0;
+let preActionTimer = null;
 
 // =========================================================================
 // ПРОЦЕДУРНЫЙ ЗВУКОВОЙ ДВИЖОК (Web Audio API — 0 КБ внешних файлов)
@@ -318,6 +324,27 @@ const SoundFX = {
                 osc.stop(now + idx * 0.08 + 0.36);
             });
         }
+    },
+    playTimerTick(secLeft, isMyTurn) {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        const urgent = secLeft <= 5;
+        const baseFreq = urgent ? (isMyTurn ? 987.77 : 783.99) : (isMyTurn ? 740 : 587.33);
+        const vol = isMyTurn ? (urgent ? 0.14 : 0.09) : (urgent ? 0.055 : 0.035);
+        const pulses = urgent && isMyTurn ? [0, 0.11] : [0];
+        pulses.forEach((offset, idx) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = urgent ? "triangle" : "sine";
+            osc.frequency.setValueAtTime(baseFreq * (idx === 1 ? 1.18 : 1), now + offset);
+            gain.gain.setValueAtTime(vol, now + offset);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.085);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now + offset);
+            osc.stop(now + offset + 0.09);
+        });
     }
 };
 
@@ -334,6 +361,39 @@ const lobbyUploadAvatarBtn = document.getElementById("lobby-upload-avatar-btn");
 const lobbyClearAvatarBtn = document.getElementById("lobby-clear-avatar-btn");
 const avatarFileInput = document.getElementById("avatar-file-input");
 const tableUploadAvatarBtn = document.getElementById("table-upload-avatar-btn");
+
+const avatarCropModal = document.getElementById("avatar-crop-modal");
+const closeCropModalBtn = document.getElementById("close-crop-modal-btn");
+const cropFitBtn = document.getElementById("crop-fit-btn");
+const cropFillBtn = document.getElementById("crop-fill-btn");
+const cropResetBtn = document.getElementById("crop-reset-btn");
+const cropCanvasWrap = document.getElementById("crop-canvas-wrap");
+const avatarCropCanvas = document.getElementById("avatar-crop-canvas");
+const avatarZoomSlider = document.getElementById("avatar-zoom-slider");
+const avatarZoomLabel = document.getElementById("avatar-zoom-label");
+const deleteCurrentAvatarBtn = document.getElementById("delete-current-avatar-btn");
+const cancelCropBtn = document.getElementById("cancel-crop-btn");
+const saveCropBtn = document.getElementById("save-crop-btn");
+
+const lastHandBtn = document.getElementById("last-hand-btn");
+const lastHandModal = document.getElementById("last-hand-modal");
+const lastHandTitleEl = document.getElementById("last-hand-title");
+const closeLastHandBtn = document.getElementById("close-last-hand-btn");
+const lastHandBodyEl = document.getElementById("last-hand-body");
+
+const nicknameModal = document.getElementById("nickname-modal");
+const closeNickModalBtn = document.getElementById("close-nick-modal-btn");
+const cancelNickBtn = document.getElementById("cancel-nick-btn");
+const nicknameForm = document.getElementById("nickname-form");
+const nicknameModalInput = document.getElementById("nickname-modal-input");
+
+const preActionBarEl = document.getElementById("pre-action-bar");
+const preCheckFoldBtn = document.getElementById("pre-check-fold-btn");
+const preCheckBtn = document.getElementById("pre-check-btn");
+const preFoldBtn = document.getElementById("pre-fold-btn");
+const preCallExactBtn = document.getElementById("pre-call-exact-btn");
+const preCallExactLabel = document.getElementById("pre-call-exact-label");
+const preCallAnyBtn = document.getElementById("pre-call-any-btn");
 const roomsListEl = document.getElementById("rooms-list");
 const refreshRoomsBtn = document.getElementById("refresh-rooms-btn");
 const createRoomBtn = document.getElementById("create-room-btn");
@@ -745,17 +805,203 @@ if (lobbyClearAvatarBtn) {
     });
 }
 
+// =========================================================================
+// ИНТЕРАКТИВНЫЙ РЕДАКТОР ФОТО (БЕЗ ОБРЕЗКИ ИЛИ С РУЧНЫМ МАСШТАБИРОВАНИЕМ)
+// =========================================================================
+let cropSourceImg = null;
+let cropMode = "fit"; // "fit" (вписать целиком без обрезки) | "fill" (заполнить 4:3)
+let cropZoomPct = 100;
+let cropPanX = 0;
+let cropPanY = 0;
+let isDraggingCrop = false;
+let cropDragStartX = 0;
+let cropDragStartY = 0;
+
+function openAvatarCropModal(img) {
+    cropSourceImg = img;
+    cropMode = "fit"; // По умолчанию — без обрезки (вписать целиком)
+    cropZoomPct = 100;
+    cropPanX = 0;
+    cropPanY = 0;
+    if (avatarZoomSlider) avatarZoomSlider.value = "100";
+    if (avatarZoomLabel) avatarZoomLabel.textContent = "100%";
+    if (cropFitBtn) cropFitBtn.classList.add("active");
+    if (cropFillBtn) cropFillBtn.classList.remove("active");
+    if (deleteCurrentAvatarBtn) {
+        deleteCurrentAvatarBtn.classList.toggle("hidden", !myAvatarUrl);
+    }
+    if (avatarCropModal) {
+        avatarCropModal.classList.remove("hidden");
+    }
+    drawCropPreview();
+}
+
+function closeAvatarCropModal() {
+    if (avatarCropModal) {
+        avatarCropModal.classList.add("hidden");
+    }
+    cropSourceImg = null;
+}
+
+function drawImageOnCanvas(ctx, w, h, img) {
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#080d18";
+    ctx.fillRect(0, 0, w, h);
+
+    if (!img) return;
+
+    // 1. Мягкий атмосферный фон из того же фото (чтобы при режиме "Без обрезки" края смотрелись стильно)
+    const bgScale = Math.max(w / img.width, h / img.height) * 1.08;
+    const bgW = img.width * bgScale;
+    const bgH = img.height * bgScale;
+    ctx.save();
+    ctx.globalAlpha = 0.26;
+    if ("filter" in ctx) {
+        ctx.filter = "blur(7px)";
+    }
+    ctx.drawImage(img, (w - bgW) / 2, (h - bgH) / 2, bgW, bgH);
+    ctx.restore();
+
+    // 2. Основное изображение с учетом выбранного режима (fit / fill), масштаба и сдвига мышкой
+    const baseScale =
+        cropMode === "fit"
+            ? Math.min(w / img.width, h / img.height)
+            : Math.max(w / img.width, h / img.height);
+    const finalScale = baseScale * (cropZoomPct / 100);
+    const drawW = img.width * finalScale;
+    const drawH = img.height * finalScale;
+
+    const previewW = avatarCropCanvas ? avatarCropCanvas.width : 336;
+    const ratio = w / previewW;
+    const dx = (w - drawW) / 2 + cropPanX * ratio;
+    const dy = (h - drawH) / 2 + cropPanY * ratio;
+
+    ctx.drawImage(img, dx, dy, drawW, drawH);
+}
+
+function drawCropPreview() {
+    if (!avatarCropCanvas || !cropSourceImg) return;
+    const ctx = avatarCropCanvas.getContext("2d");
+    drawImageOnCanvas(ctx, avatarCropCanvas.width, avatarCropCanvas.height, cropSourceImg);
+}
+
+if (cropFitBtn) {
+    cropFitBtn.addEventListener("click", () => {
+        cropMode = "fit";
+        cropPanX = 0;
+        cropPanY = 0;
+        cropFitBtn.classList.add("active");
+        if (cropFillBtn) cropFillBtn.classList.remove("active");
+        drawCropPreview();
+    });
+}
+
+if (cropFillBtn) {
+    cropFillBtn.addEventListener("click", () => {
+        cropMode = "fill";
+        cropPanX = 0;
+        cropPanY = 0;
+        cropFillBtn.classList.add("active");
+        if (cropFitBtn) cropFitBtn.classList.remove("active");
+        drawCropPreview();
+    });
+}
+
+if (cropResetBtn) {
+    cropResetBtn.addEventListener("click", () => {
+        cropZoomPct = 100;
+        cropPanX = 0;
+        cropPanY = 0;
+        if (avatarZoomSlider) avatarZoomSlider.value = "100";
+        if (avatarZoomLabel) avatarZoomLabel.textContent = "100%";
+        drawCropPreview();
+    });
+}
+
+if (avatarZoomSlider) {
+    avatarZoomSlider.addEventListener("input", () => {
+        cropZoomPct = parseInt(avatarZoomSlider.value, 10) || 100;
+        if (avatarZoomLabel) avatarZoomLabel.textContent = `${cropZoomPct}%`;
+        drawCropPreview();
+    });
+}
+
+if (cropCanvasWrap) {
+    cropCanvasWrap.addEventListener("pointerdown", (e) => {
+        if (!cropSourceImg) return;
+        isDraggingCrop = true;
+        cropDragStartX = e.clientX - cropPanX;
+        cropDragStartY = e.clientY - cropPanY;
+        cropCanvasWrap.setPointerCapture(e.pointerId);
+    });
+    cropCanvasWrap.addEventListener("pointermove", (e) => {
+        if (!isDraggingCrop || !cropSourceImg) return;
+        cropPanX = e.clientX - cropDragStartX;
+        cropPanY = e.clientY - cropDragStartY;
+        drawCropPreview();
+    });
+    const stopDrag = () => {
+        isDraggingCrop = false;
+    };
+    cropCanvasWrap.addEventListener("pointerup", stopDrag);
+    cropCanvasWrap.addEventListener("pointercancel", stopDrag);
+
+    cropCanvasWrap.addEventListener(
+        "wheel",
+        (e) => {
+            if (!cropSourceImg) return;
+            e.preventDefault();
+            const delta = e.deltaY < 0 ? 8 : -8;
+            cropZoomPct = Math.min(320, Math.max(100, cropZoomPct + delta));
+            if (avatarZoomSlider) avatarZoomSlider.value = String(cropZoomPct);
+            if (avatarZoomLabel) avatarZoomLabel.textContent = `${cropZoomPct}%`;
+            drawCropPreview();
+        },
+        { passive: false }
+    );
+}
+
+if (closeCropModalBtn) closeCropModalBtn.addEventListener("click", closeAvatarCropModal);
+if (cancelCropBtn) cancelCropBtn.addEventListener("click", closeAvatarCropModal);
+
+if (deleteCurrentAvatarBtn) {
+    deleteCurrentAvatarBtn.addEventListener("click", () => {
+        saveAndSyncAvatar(null);
+        closeAvatarCropModal();
+        showToast("Фото профиля удалено");
+    });
+}
+
+if (saveCropBtn) {
+    saveCropBtn.addEventListener("click", () => {
+        if (!cropSourceImg) return;
+        const outCanvas = document.createElement("canvas");
+        outCanvas.width = 184;
+        outCanvas.height = 138;
+        const outCtx = outCanvas.getContext("2d");
+        drawImageOnCanvas(outCtx, outCanvas.width, outCanvas.height, cropSourceImg);
+        const dataUrl = outCanvas.toDataURL("image/jpeg", 0.80);
+        saveAndSyncAvatar(dataUrl);
+        closeAvatarCropModal();
+        showToast("Фото профиля сохранено и обновлено за столом!");
+    });
+}
+
 if (avatarFileInput) {
-    avatarFileInput.addEventListener("change", async (e) => {
+    avatarFileInput.addEventListener("change", (e) => {
         const file = e.target.files && e.target.files[0];
         if (!file) return;
-        try {
-            const compressedDataUrl = await compressAvatarImage(file);
-            saveAndSyncAvatar(compressedDataUrl);
-            showToast("Фото профиля сохранено и обновлено за столом!");
-        } catch (err) {
-            showToast("Не удалось обработать изображение: " + err.message, true);
-        }
+        const reader = new FileReader();
+        reader.onerror = () => showToast("Ошибка чтения файла изображения", true);
+        reader.onload = () => {
+            const img = new Image();
+            img.onerror = () => showToast("Выбранный файл не является изображением", true);
+            img.onload = () => {
+                openAvatarCropModal(img);
+            };
+            img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
     });
 }
 
@@ -773,36 +1019,203 @@ function saveAndSyncAvatar(dataUrl) {
     });
 }
 
-function compressAvatarImage(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(new Error("Ошибка чтения файла"));
-        reader.onload = () => {
-            const img = new Image();
-            img.onerror = () => reject(new Error("Файл не является изображением"));
-            img.onload = () => {
-                const targetW = 168;
-                const targetH = 126;
-                const canvas = document.createElement("canvas");
-                canvas.width = targetW;
-                canvas.height = targetH;
-                const ctx = canvas.getContext("2d");
+// =========================================================================
+// СМЕНА НИКНЕЙМА ПРЯМО В ИГРЕ (ПО КЛИКУ НА СВОЙ НИК)
+// =========================================================================
+function openNicknameModal() {
+    if (!nicknameModal || !nicknameModalInput) return;
+    nicknameModalInput.value = myPlayerName || playerNameInput.value.trim() || "";
+    nicknameModal.classList.remove("hidden");
+    setTimeout(() => {
+        nicknameModalInput.focus();
+        nicknameModalInput.select();
+    }, 30);
+}
 
-                // Центрированный кроп (object-fit: cover)
-                const scale = Math.max(targetW / img.width, targetH / img.height);
-                const sw = targetW / scale;
-                const sh = targetH / scale;
-                const sx = (img.width - sw) / 2;
-                const sy = (img.height - sh) / 2;
+function closeNicknameModal() {
+    if (nicknameModal) {
+        nicknameModal.classList.add("hidden");
+    }
+}
 
-                ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetW, targetH);
-                const out = canvas.toDataURL("image/jpeg", 0.78);
-                resolve(out);
-            };
-            img.src = reader.result;
-        };
-        reader.readAsDataURL(file);
+if (closeNickModalBtn) closeNickModalBtn.addEventListener("click", closeNicknameModal);
+if (cancelNickBtn) cancelNickBtn.addEventListener("click", closeNicknameModal);
+
+if (nicknameForm) {
+    nicknameForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const newName = (nicknameModalInput.value || "").trim().slice(0, 20);
+        if (!newName) {
+            showToast("Никнейм не может быть пустым", true);
+            return;
+        }
+        myPlayerName = newName;
+        playerNameInput.value = newName;
+        localStorage.setItem(STORAGE_KEY_NAME, newName);
+        refreshAvatarUI();
+        sendWs({
+            type: "update_name",
+            name: newName
+        });
+        closeNicknameModal();
+        showToast(`Ваш никнейм изменен на «${newName}»`);
     });
+}
+
+// =========================================================================
+// ПРОСМОТР ИТОГОВ ПРОШЛОЙ РАЗДАЧИ (КАРТЫ, ПОБЕДИТЕЛИ, ЛОГ)
+// =========================================================================
+function openLastHandModal() {
+    if (!lastHandModal) return;
+    renderLastHandModal(roomState ? roomState.last_hand_summary : null);
+    lastHandModal.classList.remove("hidden");
+}
+
+function closeLastHandModal() {
+    if (lastHandModal) {
+        lastHandModal.classList.add("hidden");
+    }
+}
+
+if (lastHandBtn) lastHandBtn.addEventListener("click", openLastHandModal);
+if (closeLastHandBtn) closeLastHandBtn.addEventListener("click", closeLastHandModal);
+
+function renderLastHandModal(summary) {
+    if (!lastHandBodyEl) return;
+    if (!summary) {
+        if (lastHandTitleEl) lastHandTitleEl.textContent = "📜 Итоги прошлой раздачи";
+        lastHandBodyEl.innerHTML = `<div class="empty-rooms">За этим столом ещё не завершена ни одна раздача.</div>`;
+        return;
+    }
+
+    if (lastHandTitleEl) {
+        lastHandTitleEl.textContent = `📜 Итоги раздачи #${summary.hand_number}`;
+    }
+
+    lastHandBodyEl.innerHTML = "";
+
+    // 1. Шапка: Банк и победители
+    const headerEl = document.createElement("div");
+    headerEl.className = "lh-summary-header";
+
+    const potEl = document.createElement("div");
+    potEl.className = "lh-pot-badge";
+    potEl.textContent = `🪙 Общий банк: ${summary.pot}`;
+    headerEl.appendChild(potEl);
+
+    const winnersWrap = document.createElement("div");
+    winnersWrap.className = "lh-winners-list";
+    for (const w of summary.winners || []) {
+        const pill = document.createElement("div");
+        pill.className = "lh-winner-pill";
+        pill.textContent = `🏆 ${w.player_name} +${w.amount} (${w.hand_name})`;
+        winnersWrap.appendChild(pill);
+    }
+    headerEl.appendChild(winnersWrap);
+    lastHandBodyEl.appendChild(headerEl);
+
+    // 2. Общие карты стола (Борд)
+    const boardSection = document.createElement("div");
+    boardSection.className = "lh-board-section";
+    const boardLabel = document.createElement("div");
+    boardLabel.className = "lh-board-label";
+    boardLabel.textContent =
+        summary.community_cards && summary.community_cards.length > 0
+            ? "Общие карты на столе (Борд)"
+            : "Раздача завершилась на префлопе (без открытия общих карт)";
+    boardSection.appendChild(boardLabel);
+
+    const boardCardsRow = document.createElement("div");
+    boardCardsRow.className = "lh-board-cards";
+    if (summary.community_cards && summary.community_cards.length > 0) {
+        for (const c of summary.community_cards) {
+            boardCardsRow.appendChild(renderCardElement(c, false, false, 0, null));
+        }
+    } else {
+        for (let i = 0; i < 5; i++) {
+            const slot = document.createElement("div");
+            slot.className = "card-slot";
+            boardCardsRow.appendChild(slot);
+        }
+    }
+    boardSection.appendChild(boardCardsRow);
+    lastHandBodyEl.appendChild(boardSection);
+
+    // 3. Карты и результаты всех участников раздачи
+    const playersGrid = document.createElement("div");
+    playersGrid.className = "lh-players-grid";
+
+    for (const p of summary.players || []) {
+        const pCard = document.createElement("div");
+        const isWin = p.won_amount > 0;
+        pCard.className = `lh-player-card${isWin ? " is-winner" : ""}${p.folded ? " is-folded" : ""}`;
+
+        const topRow = document.createElement("div");
+        topRow.className = "lh-player-top";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = `${p.name}${p.id === myPlayerId ? " (Вы)" : ""}`;
+        const statusSpan = document.createElement("span");
+        if (isWin) {
+            statusSpan.style.color = "#6ee7b7";
+            statusSpan.textContent = `🏆 +${p.won_amount}`;
+        } else if (p.folded) {
+            statusSpan.style.color = "#94a3b8";
+            statusSpan.textContent = "Пас";
+        } else {
+            statusSpan.style.color = "#cbd5e1";
+            statusSpan.textContent = "Вскрытие";
+        }
+        topRow.appendChild(nameSpan);
+        topRow.appendChild(statusSpan);
+        pCard.appendChild(topRow);
+
+        const cardsRow = document.createElement("div");
+        cardsRow.className = "lh-player-cards-row";
+
+        const holeWrap = document.createElement("div");
+        holeWrap.className = "lh-player-hole";
+        for (const hc of p.hole_cards || []) {
+            holeWrap.appendChild(renderCardElement(hc, true, false, 0, null));
+        }
+        cardsRow.appendChild(holeWrap);
+
+        const metaWrap = document.createElement("div");
+        metaWrap.className = "lh-player-meta";
+        if (p.hand_name) {
+            const comboEl = document.createElement("div");
+            comboEl.className = "lh-combo-name";
+            comboEl.textContent = p.hand_name;
+            metaWrap.appendChild(comboEl);
+        }
+        const betInfo = document.createElement("div");
+        betInfo.textContent = `В банк: ${p.total_bet} 🪙`;
+        metaWrap.appendChild(betInfo);
+        const stackInfo = document.createElement("div");
+        stackInfo.textContent = `Стек после: ${p.chips_after} 🪙`;
+        metaWrap.appendChild(stackInfo);
+
+        cardsRow.appendChild(metaWrap);
+        pCard.appendChild(cardsRow);
+        playersGrid.appendChild(pCard);
+    }
+    lastHandBodyEl.appendChild(playersGrid);
+
+    // 4. Пошаговый лог прошлой раздачи
+    if (summary.actions_log && summary.actions_log.length > 0) {
+        const logTitle = document.createElement("div");
+        logTitle.className = "diag-section-title";
+        logTitle.textContent = "Пошаговая хронология раздачи:";
+        lastHandBodyEl.appendChild(logTitle);
+
+        const logBox = document.createElement("div");
+        logBox.className = "lh-log-box";
+        for (const line of summary.actions_log) {
+            const item = document.createElement("div");
+            item.textContent = line;
+            logBox.appendChild(item);
+        }
+        lastHandBodyEl.appendChild(logBox);
+    }
 }
 
 // =========================================================================
@@ -877,7 +1290,8 @@ function joinRoom(roomId) {
     lobbyScreen.classList.remove("active");
     gameScreen.classList.add("active");
     chatMessagesEl.innerHTML = "";
-    lastLogCount = 0;
+    lastRenderedLogs = [];
+    selectedPreAction = null;
     prevHandNumber = 0;
     prevCommunityCount = 0;
     prevPot = 0;
@@ -991,6 +1405,7 @@ function initSeatDOM() {
                     <div class="dealer-button hidden" id="seat-dealer-${pos}" title="Дилер (Баттон)">D</div>
                     <div class="blind-badge hidden" id="seat-blind-${pos}">SB</div>
                 </div>
+                <div class="seat-timer-countdown hidden" id="seat-timer-sec-${pos}">⏱ 10с</div>
                 <div class="seat-emoji-layer" id="seat-emoji-${pos}"></div>
                 <div class="seat-main-row">
                     <div class="seat-media-wrap" id="seat-media-wrap-${pos}" title="Нажмите, чтобы увеличить или уменьшить камеру/фото этого игрока">
@@ -1019,6 +1434,14 @@ function initSeatDOM() {
         if (mediaWrapEl) {
             mediaWrapEl.addEventListener("click", () => {
                 seatEl.classList.toggle("cam-expanded");
+            });
+        }
+        const nameEl = document.getElementById(`seat-name-${pos}`);
+        if (nameEl) {
+            nameEl.addEventListener("click", () => {
+                if (nameEl.classList.contains("editable-nick")) {
+                    openNicknameModal();
+                }
             });
         }
     }
@@ -1215,6 +1638,24 @@ function handleRoomStateUpdate(state) {
     pauseGameBtn.textContent = state.paused ? "⏸ Авто-раздача: ВЫКЛ" : "🔁 Авто-раздача: ВКЛ";
     pauseGameBtn.classList.toggle("active", !state.paused);
 
+    if (lastHandBtn) {
+        if (state.last_hand_summary) {
+            lastHandBtn.textContent = `📜 Прошлая раздача (#${state.last_hand_summary.hand_number})`;
+            lastHandBtn.classList.add("active");
+            if (lastHandModal && !lastHandModal.classList.contains("hidden")) {
+                renderLastHandModal(state.last_hand_summary);
+            }
+        } else {
+            lastHandBtn.textContent = "📜 Прошлая раздача";
+            lastHandBtn.classList.remove("active");
+        }
+    }
+
+    // Сброс преднажатий при смене раздачи или улицы (префлоп -> флоп -> тёрн -> ривер)
+    if (isNewHand || state.stage !== prevStage || state.stage === "waiting" || state.stage === "showdown") {
+        setPreAction(null, 0);
+    }
+
     const winningCardKeys = new Set();
     if (state.stage === "showdown" && state.winners.length > 0) {
         for (const w of state.winners) {
@@ -1292,7 +1733,15 @@ function handleRoomStateUpdate(state) {
         }
 
         const nameEl = document.getElementById(`seat-name-${pos}`);
-        nameEl.textContent = player.id === myPlayerId ? `${player.name} (Вы)` : player.name;
+        if (player.id === myPlayerId) {
+            nameEl.textContent = `${player.name} (Вы) ✎`;
+            nameEl.classList.add("editable-nick");
+            nameEl.title = "Нажмите, чтобы изменить свой никнейм";
+        } else {
+            nameEl.textContent = player.name;
+            nameEl.classList.remove("editable-nick");
+            nameEl.removeAttribute("title");
+        }
 
         const chipsEl = document.getElementById(`seat-chips-${pos}`);
         chipsEl.textContent = `${player.chips} 🪙`;
@@ -1334,6 +1783,10 @@ function handleRoomStateUpdate(state) {
 
         const timerWrap = document.getElementById(`seat-timer-wrap-${pos}`);
         timerWrap.classList.toggle("hidden", !isTurn);
+        const timerSecBadge = document.getElementById(`seat-timer-sec-${pos}`);
+        if (timerSecBadge && !isTurn) {
+            timerSecBadge.classList.add("hidden");
+        }
 
         const betEl = document.getElementById(`seat-bet-${pos}`);
         if (player.bet_in_round > 0) {
@@ -1441,13 +1894,7 @@ function handleRoomStateUpdate(state) {
         updateActionControls(state, me);
     }
 
-    if (state.log.length > lastLogCount) {
-        const newLogs = state.log.slice(lastLogCount);
-        for (const entry of newLogs) {
-            appendSystemLog(entry);
-        }
-        lastLogCount = state.log.length;
-    }
+    syncNewSystemLogs(state.log || []);
 
     prevHandNumber = state.hand_number;
     prevCommunityCount = state.community_cards.length;
@@ -1457,6 +1904,41 @@ function handleRoomStateUpdate(state) {
     prevAllInCount = currentAllInCount;
 
     syncWebrtcPeers(state.players);
+}
+
+// Надежная синхронизация системного лога даже после достижения лимита в 60 строк на сервере
+function syncNewSystemLogs(serverLogs) {
+    if (!serverLogs || serverLogs.length === 0) return;
+    if (lastRenderedLogs.length === 0) {
+        for (const entry of serverLogs) {
+            appendSystemLog(entry);
+        }
+        lastRenderedLogs = serverLogs.slice();
+        return;
+    }
+
+    // Ищем максимальное перекрытие конца lastRenderedLogs с началом serverLogs
+    let overlap = 0;
+    const maxCheck = Math.min(lastRenderedLogs.length, serverLogs.length);
+    for (let k = maxCheck; k >= 1; k--) {
+        let match = true;
+        for (let i = 0; i < k; i++) {
+            if (lastRenderedLogs[lastRenderedLogs.length - k + i] !== serverLogs[i]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            overlap = k;
+            break;
+        }
+    }
+
+    const newEntries = serverLogs.slice(overlap);
+    for (const entry of newEntries) {
+        appendSystemLog(entry);
+    }
+    lastRenderedLogs = serverLogs.slice();
 }
 
 function updateCenterBannerText() {
@@ -1565,7 +2047,24 @@ function startClientTickers() {
 
         barEl.style.width = `${pct}%`;
         barEl.classList.toggle("urgent", remaining <= 10);
-    }, 250);
+
+        const secCeil = Math.ceil(remaining);
+        const timerSecBadge = document.getElementById(`seat-timer-sec-${pos}`);
+        if (secCeil <= 10 && secCeil > 0) {
+            if (timerSecBadge) {
+                timerSecBadge.textContent = `⏱ ${secCeil}с`;
+                timerSecBadge.classList.remove("hidden");
+            }
+            const tickKey = `${roomState.hand_number}_${roomState.stage}_${roomState.current_turn_seat}_${secCeil}`;
+            if (tickKey !== lastTimerSoundKey) {
+                lastTimerSoundKey = tickKey;
+                const isMyTurn = Boolean(me && roomState.current_turn_seat === me.seat);
+                SoundFX.playTimerTick(secCeil, isMyTurn);
+            }
+        } else if (timerSecBadge) {
+            timerSecBadge.classList.add("hidden");
+        }
+    }, 200);
 }
 
 function showSeatReaction(playerId, emoji) {
@@ -1596,21 +2095,134 @@ document.querySelectorAll(".emoji-btn").forEach((btn) => {
 });
 
 // =========================================================================
-// УПРАВЛЕНИЕ СТАВКАМИ (БЕЗ ПОДСКАЗОК ШАНСОВ ВО ВРЕМЯ ТОРГОВЛИ)
+// ПРЕДНАЖАТИЕ КНОПОК (ПРЕДХОД) И УПРАВЛЕНИЕ СТАВКАМИ
 // =========================================================================
+function setPreAction(mode, targetBet = 0) {
+    if (preActionTimer) {
+        clearTimeout(preActionTimer);
+        preActionTimer = null;
+    }
+    selectedPreAction = mode;
+    preActionTargetBet = targetBet;
+    refreshPreActionButtonsUI();
+}
+
+function refreshPreActionButtonsUI() {
+    const buttons = [preCheckFoldBtn, preCheckBtn, preFoldBtn, preCallExactBtn, preCallAnyBtn];
+    for (const btn of buttons) {
+        if (!btn) continue;
+        const isAct = btn.dataset.pre === selectedPreAction;
+        btn.classList.toggle("active", isAct);
+        const iconEl = btn.querySelector(".pre-check-icon");
+        if (iconEl) {
+            iconEl.textContent = isAct ? "☑" : "☐";
+        }
+    }
+}
+
+[preCheckFoldBtn, preCheckBtn, preFoldBtn, preCallExactBtn, preCallAnyBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+        const mode = btn.dataset.pre;
+        if (selectedPreAction === mode) {
+            setPreAction(null, 0);
+        } else {
+            const curBet = roomState ? roomState.current_bet : 0;
+            setPreAction(mode, curBet);
+            SoundFX.playCard();
+        }
+    });
+});
+
 function updateActionControls(state, me) {
-    const isMyTurn =
-        !state.all_in_runout &&
-        state.current_turn_seat === me.seat &&
+    const inActiveHand =
         state.stage !== "waiting" &&
         state.stage !== "showdown" &&
+        !state.all_in_runout &&
         !me.folded &&
         !me.all_in;
 
-    actionControlsEl.classList.toggle("disabled", !isMyTurn);
-    if (!isMyTurn) return;
-
+    const isMyTurn = inActiveHand && state.current_turn_seat === me.seat;
     const toCall = Math.max(0, state.current_bet - me.bet_in_round);
+
+    // Если игрок не в активной раздаче — сбрасываем предход и прячем панель предхода
+    if (!inActiveHand) {
+        setPreAction(null, 0);
+        if (preActionBarEl) preActionBarEl.classList.add("hidden");
+        actionControlsEl.classList.remove("hidden");
+        actionControlsEl.classList.add("disabled");
+        return;
+    }
+
+    // Проверяем, не устарел ли предход из-за чужого рейза
+    if (selectedPreAction === "check" && toCall > 0) {
+        setPreAction(null, 0);
+        showToast("Предход «Чек» отменен: соперник сделал ставку");
+    } else if (selectedPreAction === "call_exact" && state.current_bet > preActionTargetBet) {
+        setPreAction(null, 0);
+        showToast("Предход «Колл» отменен: ставка была повышена");
+    }
+
+    // Когда ход у другого игрока — показываем панель преднажатия (предход)
+    if (!isMyTurn) {
+        if (preActionBarEl) {
+            preActionBarEl.classList.remove("hidden");
+            if (preCheckBtn) {
+                preCheckBtn.classList.toggle("hidden", toCall > 0);
+            }
+            if (preCallExactBtn && preCallExactLabel) {
+                if (toCall > 0) {
+                    const callAmt = Math.min(me.chips, toCall);
+                    preCallExactLabel.textContent = callAmt >= me.chips ? `Олл-ин (${callAmt})` : `Колл (${callAmt})`;
+                    preCallExactBtn.classList.remove("hidden");
+                } else {
+                    preCallExactBtn.classList.add("hidden");
+                }
+            }
+            refreshPreActionButtonsUI();
+        }
+        actionControlsEl.classList.add("hidden");
+        actionControlsEl.classList.add("disabled");
+        return;
+    }
+
+    // Сейчас НАШ ХОД: прячем панель предхода, показываем основные кнопки
+    if (preActionBarEl) preActionBarEl.classList.add("hidden");
+    actionControlsEl.classList.remove("hidden");
+
+    // Если был выбран предход — автоматически выполняем его!
+    if (selectedPreAction) {
+        const chosen = selectedPreAction;
+        setPreAction(null, 0);
+        let autoAction = null;
+        if (chosen === "check_fold") {
+            autoAction = toCall === 0 ? "check" : "fold";
+        } else if (chosen === "check") {
+            if (toCall === 0) autoAction = "check";
+        } else if (chosen === "fold") {
+            autoAction = "fold";
+        } else if (chosen === "call_exact") {
+            if (state.current_bet <= preActionTargetBet) {
+                autoAction = toCall === 0 ? "check" : "call";
+            }
+        } else if (chosen === "call_any") {
+            autoAction = toCall === 0 ? "check" : "call";
+        }
+
+        if (autoAction) {
+            actionControlsEl.classList.add("disabled");
+            preActionTimer = setTimeout(() => {
+                preActionTimer = null;
+                if (autoAction === "check") SoundFX.playCheck();
+                else if (autoAction === "fold") SoundFX.playCard();
+                sendWs({ type: "action", action: autoAction });
+            }, 180);
+            return;
+        }
+    }
+
+    actionControlsEl.classList.remove("disabled");
+
     if (toCall === 0) {
         checkCallLabel.textContent = "Чек";
         actCheckCallBtn.dataset.mode = "check";
@@ -1802,13 +2414,33 @@ const remoteStreams = new Map();
 const peerRetryCounts = new Map();
 const MAX_P2P_RETRIES = 3;
 
-const RTC_CONFIG = {
-    iceServers: [
+function buildRtcConfig() {
+    const turnHost = window.location.hostname || "poker.vikhr.online";
+    const servers = [
         { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-        { urls: "stun:stun2.l.google.com:19302" }
-    ]
-};
+        { urls: "stun:stun1.l.google.com:19302" }
+    ];
+    // Если открыто на сервере (не localhost), добавляем встроенный coturn TURN-сервер на порту 3478
+    // WebRTC всегда сначала выбирает прямое соединение P2P (приоритет srflx > relay),
+    // и автоматически включает ретрансляцию через coturn ТОЛЬКО если прямой P2P заблокирован NAT/файрволом!
+    if (turnHost && turnHost !== "localhost" && turnHost !== "127.0.0.1") {
+        servers.push({
+            urls: [
+                `stun:${turnHost}:3478`,
+                `turn:${turnHost}:3478?transport=udp`,
+                `turn:${turnHost}:3478?transport=tcp`
+            ],
+            username: "poker",
+            credential: "rustholdem_turn_2026"
+        });
+    }
+    return {
+        iceServers: servers,
+        iceCandidatePoolSize: 2
+    };
+}
+
+const RTC_CONFIG = buildRtcConfig();
 
 async function acquireTrack(kind) {
     const kindRu = kind === "video" ? "веб-камера" : "микрофон";
@@ -1999,7 +2631,31 @@ function getOrCreatePeerConnection(peerId) {
                 clearTimeout(state.disconnectTimer);
                 state.disconnectTimer = null;
             }
-            logMediaDiag("ok", `P2P видео/аудио канал с "${pName}" успешно установлен (${st})!`, false);
+            if (typeof pc.getStats === "function") {
+                pc.getStats()
+                    .then((stats) => {
+                        let usedRelay = false;
+                        stats.forEach((report) => {
+                            if (report.type === "candidate-pair" && report.state === "succeeded" && report.nominated) {
+                                const localCand = stats.get(report.localCandidateId);
+                                const remoteCand = stats.get(report.remoteCandidateId);
+                                if (
+                                    (localCand && localCand.candidateType === "relay") ||
+                                    (remoteCand && remoteCand.candidateType === "relay")
+                                ) {
+                                    usedRelay = true;
+                                }
+                            }
+                        });
+                        const modeStr = usedRelay ? "через TURN-сервер (coturn ретранслятор)" : "напрямую (P2P)";
+                        logMediaDiag("ok", `Видео/аудио канал с "${pName}" установлен [${modeStr}]!`, false);
+                    })
+                    .catch(() => {
+                        logMediaDiag("ok", `Видео/аудио канал с "${pName}" успешно установлен (${st})!`, false);
+                    });
+            } else {
+                logMediaDiag("ok", `Видео/аудио канал с "${pName}" успешно установлен (${st})!`, false);
+            }
         } else if (st === "disconnected") {
             if (state && !state.disconnectTimer) {
                 state.disconnectTimer = setTimeout(() => {

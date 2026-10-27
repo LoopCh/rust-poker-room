@@ -68,12 +68,47 @@ EOF
 
 systemctl restart caddy
 
+echo "=== 4. Установка и настройка TURN-ретранслятора coturn (порт 3478) ==="
+if ! command -v turnserver &>/dev/null; then
+    apt-get update
+    apt-get install -y coturn
+fi
+
+sed -i 's/^#*TURNSERVER_ENABLED=.*/TURNSERVER_ENABLED=1/' /etc/default/coturn 2>/dev/null || echo "TURNSERVER_ENABLED=1" >/etc/default/coturn
+
+cat >/etc/turnserver.conf <<EOF
+# RustHoldem WebRTC TURN Relay (coturn)
+listening-port=3478
+fingerprint
+lt-cred-mech
+user=poker:rustholdem_turn_2026
+realm=${DOMAIN}
+external-ip=${VPS_IP}
+min-port=49152
+max-port=49252
+max-bps=250000
+no-multicast-peers
+no-loopback-peers
+no-cli
+no-tlsv1
+no-tlsv1_1
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+EOF
+
+systemctl enable coturn
+systemctl restart coturn
+
 if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
     ufw allow 3000/tcp
     ufw allow 8443/tcp
+    ufw allow 3478/tcp
+    ufw allow 3478/udp
+    ufw allow 49152:49252/udp
 fi
 
 echo ""
-echo "🎉 Готово! Порты 80 и 443 (Xray) не затронуты."
+echo "🎉 Готово! Порты 80 и 443 (Xray) не затронуты, TURN-сервер coturn активен на порту 3478."
 echo "👉 Открывайте покер с работающей камерой и микрофоном:"
 echo "   https://${DOMAIN}:8443"
