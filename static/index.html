@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustHoldem — Покер с друзьями и видеочатом</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body data-theme="emerald">
+    <!-- Тост-уведомления -->
+    <div id="toast-container"></div>
+
+    <!-- Модальное окно диагностики камеры, микрофона и WebRTC -->
+    <div id="media-diag-modal" class="modal-backdrop hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>🛠 Диагностика камеры, микрофона и WebRTC P2P</h3>
+                <button id="close-diag-btn" class="btn btn-ghost btn-sm">✕ Закрыть</button>
+            </div>
+            <div class="diag-grid">
+                <div class="diag-item">
+                    <span class="diag-label">Защищенный контекст (HTTPS/Localhost):</span>
+                    <span id="diag-secure" class="diag-val">—</span>
+                </div>
+                <div class="diag-item">
+                    <span class="diag-label">Обнаружено видеокамер:</span>
+                    <span id="diag-cams" class="diag-val">—</span>
+                </div>
+                <div class="diag-item">
+                    <span class="diag-label">Обнаружено микрофонов:</span>
+                    <span id="diag-mics" class="diag-val">—</span>
+                </div>
+                <div class="diag-item">
+                    <span class="diag-label">Активные локальные потоки:</span>
+                    <span id="diag-tracks" class="diag-val">—</span>
+                </div>
+            </div>
+            <div class="diag-section-title">Журнал событий камеры, микрофона и P2P-соединений:</div>
+            <div id="diag-log-list" class="diag-log-list"></div>
+            <div class="modal-actions">
+                <button id="run-diag-test-btn" class="btn btn-primary btn-sm">🔍 Проверить устройства</button>
+                <button id="clear-diag-log-btn" class="btn btn-ghost btn-sm">🧹 Очистить лог</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ЛОББИ -->
+    <div id="lobby-screen" class="screen active">
+        <div class="lobby-card">
+            <div class="brand-header">
+                <div class="brand-logo">
+                    <span class="suit-s">♠</span>
+                    <span class="suit-h">♥</span>
+                    <span class="suit-c">♣</span>
+                    <span class="suit-d">♦</span>
+                </div>
+                <h1>RustHoldem Club</h1>
+                <p class="subtitle">Сверхлегкий покерный клуб на Rust с авто-ростом блайндов, анте и P2P-видео</p>
+            </div>
+
+            <div class="profile-row">
+                <label for="player-name-input">Ваш никнейм за столом:</label>
+                <input type="text" id="player-name-input" placeholder="Например, Кирилл" maxlength="18">
+            </div>
+
+            <div class="lobby-columns">
+                <div class="lobby-col">
+                    <div class="section-header">
+                        <h2>Открытые столы</h2>
+                        <button id="refresh-rooms-btn" class="btn btn-ghost btn-sm">↻ Обновить</button>
+                    </div>
+                    <div id="rooms-list" class="rooms-list">
+                        <div class="empty-rooms">Загрузка комнат...</div>
+                    </div>
+                </div>
+
+                <div class="lobby-col create-room-box">
+                    <h2>Создать приватный стол</h2>
+                    <div class="form-group">
+                        <label>Название комнаты</label>
+                        <input type="text" id="new-room-name" placeholder="Вечерний покер с друзьями" maxlength="32">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Формат игры (Пресет структуры блайндов и анте)</label>
+                        <select id="new-room-preset" class="form-select">
+                            <option value="sng_standard">🏆 Турнир Sit & Go (Рост каждые 5 мин + Анте)</option>
+                            <option value="sng_turbo">⚡ Турбо Sit & Go (Рост каждые 3 мин + Анте)</option>
+                            <option value="hyper_turbo">🔥 Гипер-Турбо Spin (Стек 50 BB, рост 2 мин)</option>
+                            <option value="deepstack_ante">👑 Хайроллер Deepstack (Анте с 1-го уровня)</option>
+                            <option value="cash">💵 Кэш-игра (Фиксированные блайнды без таймера)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label>Нач. МБ (SB)</label>
+                            <input type="number" id="new-room-sb" value="10" min="1" max="10000">
+                        </div>
+                        <div class="form-group" id="level-mins-group">
+                            <label>Уровень (мин)</label>
+                            <input type="number" id="new-room-level-mins" value="5" min="1" max="60">
+                        </div>
+                        <div class="form-group">
+                            <label>Стартовый стек</label>
+                            <input type="number" id="new-room-chips" value="1500" min="100" max="1000000">
+                        </div>
+                    </div>
+                    <button id="create-room-btn" class="btn btn-primary btn-block">✨ Создать и сесть за стол</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ИГРОВАЯ КОМНАТА -->
+    <div id="game-screen" class="screen">
+        <!-- Верхняя панель -->
+        <header class="top-bar">
+            <div class="top-left">
+                <button id="leave-room-btn" class="btn btn-ghost btn-sm" title="Покинуть стол и выйти в лобби">← В лобби</button>
+                <div class="room-badge">
+                    <span id="room-title">Покерный стол</span>
+                    <span id="room-blinds-badge" class="badge">Ур. 1 • 10/20</span>
+                    <span id="room-level-timer" class="badge badge-timer hidden" title="Время до повышения блайндов и анте">⏱ 05:00</span>
+                </div>
+                <button id="copy-link-btn" class="btn btn-outline btn-sm" title="Скопировать прямую ссылку для друзей">🔗 Пригласить</button>
+                <button id="kick-offline-btn" class="btn btn-ghost btn-sm hidden" title="Освободить места отключившихся игроков">🧹 Очистить оффлайн</button>
+            </div>
+
+            <div class="top-right">
+                <button id="sit-out-btn" class="btn btn-media" title="Пропускать раздачи, пока вы отошли">
+                    ☕ Отойти
+                </button>
+                <button id="pause-game-btn" class="btn btn-media" title="Пауза авто-старта следующей раздачи">
+                    ⏸ Авто-раздача
+                </button>
+                <select id="theme-select" class="theme-select" title="Тема сукна стола">
+                    <option value="emerald">🟢 Изумруд</option>
+                    <option value="royal">🔵 Синий Роял</option>
+                    <option value="ruby">🔴 Рубин VIP</option>
+                    <option value="obsidian">⚫ Оникс</option>
+                </select>
+                <button id="deck-color-btn" class="btn btn-media" title="Переключить 4-цветную колоду (♠♥♦♣)">
+                    🃏 2-цвет
+                </button>
+                <button id="toggle-sound-btn" class="btn btn-media active" title="Звуковые эффекты (Web Audio API)">
+                    🔊 Звук
+                </button>
+                <button id="toggle-cam-btn" class="btn btn-media" title="Включить/выключить веб-камеру (P2P)">
+                    📷 Камера: ВЫКЛ
+                </button>
+                <button id="toggle-mic-btn" class="btn btn-media" title="Включить/выключить микрофон (P2P)">
+                    🎤 Микрофон: ВЫКЛ
+                </button>
+                <button id="open-diag-btn" class="btn btn-media" title="Логи и диагностика камеры/микрофона">
+                    🛠 Медиа-лог
+                </button>
+                <button id="rebuy-btn" class="btn btn-warning btn-sm hidden">🪙 Докупить стек</button>
+            </div>
+        </header>
+
+        <!-- Основная рабочая область -->
+        <main class="table-arena">
+            <div class="poker-table">
+                <div class="table-felt">
+                    <div class="felt-inner-ring"></div>
+
+                    <!-- Центр стола: Банк, Общие карты, Статус, Кнопки старта/показа карт -->
+                    <div class="table-center">
+                        <div id="pot-container" class="pot-container">
+                            <span class="chip-icon">🪙</span>
+                            <span class="pot-label">БАНК</span>
+                            <span id="pot-amount" class="pot-value">0</span>
+                        </div>
+
+                        <div id="community-cards" class="community-cards">
+                            <!-- 5 слотов под общие карты -->
+                        </div>
+
+                        <div id="table-status-banner" class="table-status-banner">
+                            Ожидание игроков...
+                        </div>
+
+                        <div class="center-actions">
+                            <button id="start-hand-btn" class="btn btn-success btn-lg hidden">🃏 Раздать сейчас</button>
+                            <button id="show-cards-btn" class="btn btn-warning btn-sm hidden">👁 Показать свои карты столу!</button>
+                        </div>
+                    </div>
+
+                    <!-- 6 посадочных мест вокруг стола -->
+                    <div id="seats-container" class="seats-container">
+                        <!-- Генерируется один раз в app.js -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Боковая панель: лог игры и чат -->
+            <aside class="sidebar">
+                <div class="sidebar-tabs">
+                    <span class="sidebar-title">💬 Чат, раздачи и медиа-лог</span>
+                </div>
+                <div id="chat-messages" class="chat-messages"></div>
+                <form id="chat-form" class="chat-form">
+                    <input type="text" id="chat-input" placeholder="Сообщение в чат..." maxlength="200" autocomplete="off">
+                    <button type="submit" class="btn btn-primary btn-sm">➤</button>
+                </form>
+            </aside>
+        </main>
+
+        <!-- Нижняя панель управления ставками и эмодзи -->
+        <footer class="bottom-bar">
+            <div class="bottom-left">
+                <div class="my-hand-info">
+                    <span class="my-hand-label" id="my-stack-bb-label">Ваша комбинация</span>
+                    <span id="my-hand-rank" class="my-hand-value">—</span>
+                </div>
+
+                <div class="emoji-bar" title="Отправить реакцию за стол">
+                    <button type="button" class="emoji-btn" data-emoji="👏">👏</button>
+                    <button type="button" class="emoji-btn" data-emoji="🔥">🔥</button>
+                    <button type="button" class="emoji-btn" data-emoji="😎">😎</button>
+                    <button type="button" class="emoji-btn" data-emoji="🤔">🤔</button>
+                    <button type="button" class="emoji-btn" data-emoji="😂">😂</button>
+                    <button type="button" class="emoji-btn" data-emoji="🍀">🍀</button>
+                </div>
+            </div>
+
+            <div id="action-controls" class="action-controls disabled">
+                <button id="act-fold-btn" class="btn btn-danger">
+                    <span>Пас</span>
+                    <kbd class="hotkey-hint">F</kbd>
+                </button>
+                <button id="act-check-call-btn" class="btn btn-secondary">
+                    <span id="check-call-label">Чек</span>
+                    <kbd class="hotkey-hint">C</kbd>
+                </button>
+
+                <div class="raise-group">
+                    <div class="quick-bets">
+                        <button type="button" id="quick-min-btn" class="btn-chip">Мин</button>
+                        <button type="button" id="quick-half-btn" class="btn-chip">½ Банка</button>
+                        <button type="button" id="quick-pot-btn" class="btn-chip">Банк</button>
+                        <button type="button" id="quick-allin-btn" class="btn-chip">Олл-ин [A]</button>
+                    </div>
+                    <div class="slider-row">
+                        <input type="range" id="raise-slider" min="20" max="1000" step="10" value="40">
+                        <input type="number" id="raise-input" min="20" max="1000" step="10" value="40">
+                        <button id="act-raise-btn" class="btn btn-primary">
+                            <span id="raise-btn-label">Рейз</span>
+                            <kbd class="hotkey-hint">R</kbd>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,83 @@
+name: CI & Auto-Deploy to VPS
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: rust-poker-room
+  TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  test-and-build:
+    name: Test & Build Static Linux Binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install musl-tools for static linking
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install Rust toolchain with musl target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Cache Cargo registry and target build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run unit & stability tests
+        run: cargo test --verbose
+
+      - name: Build optimized static release binary
+        run: cargo build --release --target ${{ env.TARGET }}
+
+      - name: Check binary size
+        run: ls -lh target/${{ env.TARGET }}/release/${{ env.BINARY_NAME }}
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-linux-musl
+          path: target/${{ env.TARGET }}/release/${{ env.BINARY_NAME }}
+          retention-days: 7
+
+      - name: Deploy to VPS over SSH
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name != 'pull_request'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ] || [ -z "$VPS_SSH_KEY" ]; then
+            echo "⚠️ Секреты VPS_HOST, VPS_USER или VPS_SSH_KEY еще не заданы в GitHub Settings -> Secrets."
+            echo "✅ Бинарник успешно собран и протестирован (доступен во вкладке Artifacts)."
+            exit 0
+          fi
+
+          PORT="${VPS_PORT:-22}"
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+          echo "🚀 Загрузка статического бинарника на VPS ($VPS_USER@$VPS_HOST:$PORT)..."
+          scp -i ~/.ssh/id_deploy -P "$PORT" \
+            target/${{ env.TARGET }}/release/${{ env.BINARY_NAME }} \
+            "$VPS_USER@$VPS_HOST:/tmp/${{ env.BINARY_NAME }}.new"
+
+          echo "🔄 Атомарное обновление и перезапуск сервиса rust-poker..."
+          ssh -i ~/.ssh/id_deploy -p "$PORT" "$VPS_USER@$VPS_HOST" "
+            chmod +x /tmp/${{ env.BINARY_NAME }}.new &&
+            sudo mv /tmp/${{ env.BINARY_NAME }}.new /usr/local/bin/${{ env.BINARY_NAME }} &&
+            sudo systemctl restart rust-poker &&
+            sudo systemctl is-active --quiet rust-poker &&
+            echo '✅ Сервис rust-poker успешно обновлен и запущен!'
+          "
