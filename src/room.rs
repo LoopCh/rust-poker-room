@@ -154,6 +154,7 @@ pub struct Player {
     pub left_voluntarily: bool,
     pub video_enabled: bool,
     pub audio_enabled: bool,
+    pub avatar_url: Option<String>,
     pub last_action: Option<String>,
 }
 
@@ -182,6 +183,7 @@ pub struct PublicPlayerView {
     pub sitting_out: bool,
     pub video_enabled: bool,
     pub audio_enabled: bool,
+    pub avatar_url: Option<String>,
     pub last_action: Option<String>,
     pub hand_name: Option<String>,
     pub win_probability: Option<f32>,
@@ -424,6 +426,7 @@ impl PokerRoom {
             left_voluntarily: false,
             video_enabled: false,
             audio_enabled: false,
+            avatar_url: None,
             last_action: if in_active_hand {
                 Some("Ждет раздачи".to_string())
             } else {
@@ -800,6 +803,22 @@ impl PokerRoom {
         if let Some(p) = self.players.iter_mut().find(|p| p.id == player_id) {
             p.video_enabled = video;
             p.audio_enabled = audio;
+        }
+    }
+
+    pub fn update_avatar(&mut self, player_id: &str, avatar_url: Option<String>) {
+        if let Some(p) = self.players.iter_mut().find(|p| p.id == player_id) {
+            match avatar_url {
+                None => p.avatar_url = None,
+                Some(s) => {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        p.avatar_url = None;
+                    } else if trimmed.starts_with("data:image/") && trimmed.len() <= 65_536 {
+                        p.avatar_url = Some(trimmed.to_string());
+                    }
+                }
+            }
         }
     }
 
@@ -1532,6 +1551,7 @@ impl PokerRoom {
                     sitting_out: p.sitting_out,
                     video_enabled: p.video_enabled,
                     audio_enabled: p.audio_enabled,
+                    avatar_url: p.avatar_url.clone(),
                     last_action: p.last_action.clone(),
                     hand_name,
                     win_probability,
@@ -1908,5 +1928,29 @@ mod tests {
         room.leave_player("p1");
         assert!(room.players.is_empty());
         assert!(room.should_auto_close());
+    }
+
+    #[test]
+    fn test_update_avatar() {
+        let mut room = PokerRoom::new("test".into(), "Avatar Test".into(), 10, 20, 1000);
+        room.add_or_reconnect_player("p1".into(), "Alice".into())
+            .unwrap();
+
+        let valid_url = "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string();
+        room.update_avatar("p1", Some(valid_url.clone()));
+
+        let view = room.view_for_player("p1");
+        assert_eq!(view.players[0].avatar_url.as_deref(), Some(valid_url.as_str()));
+
+        // Invalid prefix is ignored
+        room.update_avatar("p1", Some("https://evil.example/a.jpg".to_string()));
+        assert_eq!(
+            room.view_for_player("p1").players[0].avatar_url.as_deref(),
+            Some(valid_url.as_str())
+        );
+
+        // Clearing avatar works
+        room.update_avatar("p1", None);
+        assert!(room.view_for_player("p1").players[0].avatar_url.is_none());
     }
 }

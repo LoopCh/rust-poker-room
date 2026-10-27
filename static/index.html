@@ -59,8 +59,15 @@
             </div>
 
             <div class="profile-row">
-                <label for="player-name-input">Ваш никнейм за столом:</label>
+                <div class="lobby-avatar-box" id="lobby-avatar-box" title="Нажмите, чтобы выбрать фото профиля">
+                    <img id="lobby-avatar-img" class="lobby-avatar-img hidden" alt="Аватар">
+                    <span id="lobby-avatar-letter" class="lobby-avatar-letter">И</span>
+                </div>
+                <label for="player-name-input">Ваш никнейм:</label>
                 <input type="text" id="player-name-input" placeholder="Например, Кирилл" maxlength="18">
+                <button type="button" id="lobby-upload-avatar-btn" class="btn btn-outline btn-sm" style="white-space: nowrap;">🖼 Фото профиля</button>
+                <button type="button" id="lobby-clear-avatar-btn" class="btn btn-ghost btn-sm hidden" title="Удалить загруженное фото">✕</button>
+                <input type="file" id="avatar-file-input" accept="image/*" class="hidden">
             </div>
 
             <div class="lobby-columns">
@@ -147,6 +154,9 @@
                 </select>
                 <button id="toggle-sound-btn" class="btn btn-media active" title="Звуковые эффекты (Web Audio API)">
                     🔊 Звук
+                </button>
+                <button id="table-upload-avatar-btn" class="btn btn-media" title="Загрузить или сменить своё фото за столом (правый клик — удалить фото)">
+                    🖼 Фото
                 </button>
                 <button id="toggle-cam-btn" class="btn btn-media" title="Включить/выключить веб-камеру (P2P)">
                     📷 Камера: ВЫКЛ

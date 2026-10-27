@@ -7,6 +7,7 @@ const STORAGE_KEY_THEME = "rustholdem_theme";
 const STORAGE_KEY_SCALE = "rustholdem_ui_scale";
 const STORAGE_KEY_SOUND = "rustholdem_sound";
 const STORAGE_KEY_CHAT_HIDDEN = "rustholdem_chat_hidden";
+const STORAGE_KEY_AVATAR = "rustholdem_player_avatar";
 
 let myPlayerId = localStorage.getItem(STORAGE_KEY_ID);
 if (!myPlayerId) {
@@ -15,6 +16,7 @@ if (!myPlayerId) {
 }
 
 let myPlayerName = localStorage.getItem(STORAGE_KEY_NAME) || "";
+let myAvatarUrl = localStorage.getItem(STORAGE_KEY_AVATAR) || null;
 let currentRoomId = null;
 let ws = null;
 let roomState = null;
@@ -325,6 +327,13 @@ const SoundFX = {
 const lobbyScreen = document.getElementById("lobby-screen");
 const gameScreen = document.getElementById("game-screen");
 const playerNameInput = document.getElementById("player-name-input");
+const lobbyAvatarBox = document.getElementById("lobby-avatar-box");
+const lobbyAvatarImg = document.getElementById("lobby-avatar-img");
+const lobbyAvatarLetter = document.getElementById("lobby-avatar-letter");
+const lobbyUploadAvatarBtn = document.getElementById("lobby-upload-avatar-btn");
+const lobbyClearAvatarBtn = document.getElementById("lobby-clear-avatar-btn");
+const avatarFileInput = document.getElementById("avatar-file-input");
+const tableUploadAvatarBtn = document.getElementById("table-upload-avatar-btn");
 const roomsListEl = document.getElementById("rooms-list");
 const refreshRoomsBtn = document.getElementById("refresh-rooms-btn");
 const createRoomBtn = document.getElementById("create-room-btn");
@@ -564,6 +573,7 @@ window.addEventListener("DOMContentLoaded", () => {
     toggleSoundBtn.textContent = soundEnabled ? "🔊 Звук" : "🔇 Без звука";
     toggleSoundBtn.classList.toggle("active", soundEnabled);
 
+    refreshAvatarUI();
     initSeatDOM();
     loadRooms();
     startClientTickers();
@@ -674,7 +684,125 @@ function getAndSavePlayerName() {
     }
     myPlayerName = name;
     localStorage.setItem(STORAGE_KEY_NAME, name);
+    refreshAvatarUI();
     return name;
+}
+
+playerNameInput.addEventListener("input", refreshAvatarUI);
+
+function refreshAvatarUI() {
+    const letter = (playerNameInput.value.trim() || myPlayerName || "И").charAt(0).toUpperCase();
+    if (lobbyAvatarLetter) {
+        lobbyAvatarLetter.textContent = letter;
+    }
+    const hasPhoto = Boolean(myAvatarUrl && myAvatarUrl.startsWith("data:image/"));
+    if (lobbyAvatarImg && lobbyAvatarLetter) {
+        if (hasPhoto) {
+            lobbyAvatarImg.src = myAvatarUrl;
+            lobbyAvatarImg.classList.remove("hidden");
+            lobbyAvatarLetter.classList.add("hidden");
+        } else {
+            lobbyAvatarImg.removeAttribute("src");
+            lobbyAvatarImg.classList.add("hidden");
+            lobbyAvatarLetter.classList.remove("hidden");
+        }
+    }
+    if (lobbyUploadAvatarBtn) {
+        lobbyUploadAvatarBtn.textContent = hasPhoto ? "🖼 Сменить фото" : "🖼 Фото профиля";
+    }
+    if (lobbyClearAvatarBtn) {
+        lobbyClearAvatarBtn.classList.toggle("hidden", !hasPhoto);
+    }
+    if (tableUploadAvatarBtn) {
+        tableUploadAvatarBtn.textContent = hasPhoto ? "🖼 Сменить фото" : "🖼 Загрузить фото";
+        tableUploadAvatarBtn.classList.toggle("active", hasPhoto);
+    }
+}
+
+function triggerAvatarPicker() {
+    if (avatarFileInput) {
+        avatarFileInput.value = "";
+        avatarFileInput.click();
+    }
+}
+
+if (lobbyAvatarBox) lobbyAvatarBox.addEventListener("click", triggerAvatarPicker);
+if (lobbyUploadAvatarBtn) lobbyUploadAvatarBtn.addEventListener("click", triggerAvatarPicker);
+if (tableUploadAvatarBtn) {
+    tableUploadAvatarBtn.addEventListener("click", triggerAvatarPicker);
+    tableUploadAvatarBtn.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        if (myAvatarUrl) {
+            saveAndSyncAvatar(null);
+            showToast("Фото профиля удалено");
+        }
+    });
+}
+if (lobbyClearAvatarBtn) {
+    lobbyClearAvatarBtn.addEventListener("click", () => {
+        saveAndSyncAvatar(null);
+        showToast("Фото профиля удалено");
+    });
+}
+
+if (avatarFileInput) {
+    avatarFileInput.addEventListener("change", async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        try {
+            const compressedDataUrl = await compressAvatarImage(file);
+            saveAndSyncAvatar(compressedDataUrl);
+            showToast("Фото профиля сохранено и обновлено за столом!");
+        } catch (err) {
+            showToast("Не удалось обработать изображение: " + err.message, true);
+        }
+    });
+}
+
+function saveAndSyncAvatar(dataUrl) {
+    myAvatarUrl = dataUrl;
+    if (dataUrl) {
+        localStorage.setItem(STORAGE_KEY_AVATAR, dataUrl);
+    } else {
+        localStorage.removeItem(STORAGE_KEY_AVATAR);
+    }
+    refreshAvatarUI();
+    sendWs({
+        type: "update_avatar",
+        avatar_url: myAvatarUrl
+    });
+}
+
+function compressAvatarImage(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("Ошибка чтения файла"));
+        reader.onload = () => {
+            const img = new Image();
+            img.onerror = () => reject(new Error("Файл не является изображением"));
+            img.onload = () => {
+                const targetW = 168;
+                const targetH = 126;
+                const canvas = document.createElement("canvas");
+                canvas.width = targetW;
+                canvas.height = targetH;
+                const ctx = canvas.getContext("2d");
+
+                // Центрированный кроп (object-fit: cover)
+                const scale = Math.max(targetW / img.width, targetH / img.height);
+                const sw = targetW / scale;
+                const sh = targetH / scale;
+                const sx = (img.width - sw) / 2;
+                const sy = (img.height - sh) / 2;
+
+                ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetW, targetH);
+                const out = canvas.toDataURL("image/jpeg", 0.78);
+                resolve(out);
+            };
+            img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+    });
 }
 
 // =========================================================================
@@ -768,6 +896,9 @@ function connectWebSocket(roomId, name) {
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
+        if (myAvatarUrl) {
+            sendWs({ type: "update_avatar", avatar_url: myAvatarUrl });
+        }
         if (videoEnabled || audioEnabled) {
             sendWs({ type: "media_state", video: videoEnabled, audio: audioEnabled });
         }
@@ -862,8 +993,9 @@ function initSeatDOM() {
                 </div>
                 <div class="seat-emoji-layer" id="seat-emoji-${pos}"></div>
                 <div class="seat-main-row">
-                    <div class="seat-media-wrap" id="seat-media-wrap-${pos}" title="Нажмите, чтобы увеличить или уменьшить камеру этого игрока">
+                    <div class="seat-media-wrap" id="seat-media-wrap-${pos}" title="Нажмите, чтобы увеличить или уменьшить камеру/фото этого игрока">
                         <video class="seat-video" id="seat-video-${pos}" autoplay playsinline></video>
+                        <img class="seat-avatar-img hidden" id="seat-avatar-img-${pos}" alt="">
                         <div class="seat-avatar-placeholder" id="seat-avatar-${pos}">?</div>
                         <div class="seat-zoom-hint">⛶</div>
                     </div>
@@ -1230,6 +1362,7 @@ function handleRoomStateUpdate(state) {
         }
 
         const videoEl = document.getElementById(`seat-video-${pos}`);
+        const avatarImgEl = document.getElementById(`seat-avatar-img-${pos}`);
         const avatarEl = document.getElementById(`seat-avatar-${pos}`);
         avatarEl.textContent = player.name.charAt(0).toUpperCase();
 
@@ -1244,6 +1377,8 @@ function handleRoomStateUpdate(state) {
             streamToAttach = remoteStreams.get(player.id) || null;
         }
 
+        const showLiveVideo = Boolean(streamToAttach && player.video_enabled);
+
         if (streamToAttach && (player.video_enabled || player.audio_enabled)) {
             if (videoEl.srcObject !== streamToAttach) {
                 videoEl.srcObject = streamToAttach;
@@ -1251,13 +1386,30 @@ function handleRoomStateUpdate(state) {
                     logMediaDiag("warn", `Автовоспроизведение потока от ${player.name} задержано браузером: ${err.message}`, false);
                 });
             }
-            videoEl.classList.toggle("active", player.video_enabled);
-            avatarEl.classList.toggle("hidden", player.video_enabled);
+            videoEl.classList.toggle("active", showLiveVideo);
         } else {
             if (videoEl.srcObject) {
                 videoEl.srcObject = null;
             }
             videoEl.classList.remove("active");
+        }
+
+        if (showLiveVideo) {
+            if (avatarImgEl) avatarImgEl.classList.add("hidden");
+            avatarEl.classList.add("hidden");
+        } else if (player.avatar_url) {
+            if (avatarImgEl) {
+                if (avatarImgEl.getAttribute("src") !== player.avatar_url) {
+                    avatarImgEl.src = player.avatar_url;
+                }
+                avatarImgEl.classList.remove("hidden");
+            }
+            avatarEl.classList.add("hidden");
+        } else {
+            if (avatarImgEl) {
+                avatarImgEl.removeAttribute("src");
+                avatarImgEl.classList.add("hidden");
+            }
             avatarEl.classList.remove("hidden");
         }
     }
@@ -1647,11 +1799,14 @@ let audioEnabled = false;
 const peerConnections = new Map();
 const peerStates = new Map();
 const remoteStreams = new Map();
+const peerRetryCounts = new Map();
+const MAX_P2P_RETRIES = 3;
 
 const RTC_CONFIG = {
     iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" }
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" }
     ]
 };
 
@@ -1731,6 +1886,7 @@ function updateMediaButtonsUI() {
 
 async function syncLocalMediaAndRenegotiate() {
     updateMediaButtonsUI();
+    peerRetryCounts.clear();
 
     if (!videoEnabled && !audioEnabled) {
         logMediaDiag("info", "Камера и микрофон выключены пользователем.");
@@ -1838,6 +1994,7 @@ function getOrCreatePeerConnection(peerId) {
         const state = peerStates.get(peerId);
 
         if (st === "connected" || st === "completed") {
+            peerRetryCounts.set(peerId, 0);
             if (state && state.disconnectTimer) {
                 clearTimeout(state.disconnectTimer);
                 state.disconnectTimer = null;
@@ -1849,13 +2006,11 @@ function getOrCreatePeerConnection(peerId) {
                     if (!peerConnections.has(peerId)) return;
                     const cur = pc.iceConnectionState;
                     if (cur === "disconnected" || cur === "failed") {
-                        logMediaDiag("warn", `P2P с "${pName}" не восстановилось (${cur}), пересоздаем чистый канал...`, false);
                         resetPeerConnection(peerId, true);
                     }
                 }, 4500);
             }
         } else if (st === "failed") {
-            logMediaDiag("warn", `P2P соединение с "${pName}" прервалось (failed). Пересоздаем канал...`, false);
             resetPeerConnection(peerId, true);
         }
     };
@@ -1885,7 +2040,20 @@ function getOrCreatePeerConnection(peerId) {
 }
 
 function resetPeerConnection(peerId, notifyRemote = false) {
+    const retries = (peerRetryCounts.get(peerId) || 0) + 1;
+    peerRetryCounts.set(peerId, retries);
     closePeer(peerId);
+
+    const pName = getPeerName(peerId);
+    if (retries > MAX_P2P_RETRIES) {
+        logMediaDiag(
+            "warn",
+            `Прямое P2P-видео с "${pName}" недоступно из-за закрытого NAT провайдера (${retries - 1} попытки). Игра и камеры других участников работают в штатном режиме.`
+        );
+        return;
+    }
+
+    logMediaDiag("info", `Перезапуск P2P-канала с "${pName}" (попытка ${retries}/${MAX_P2P_RETRIES})...`, false);
     if (notifyRemote) {
         sendWs({
             type: "webrtc_signal",
@@ -1897,7 +2065,7 @@ function resetPeerConnection(peerId, notifyRemote = false) {
     if (roomState) {
         setTimeout(() => {
             if (roomState) syncWebrtcPeers(roomState.players);
-        }, 250);
+        }, 350);
     }
 }
 
@@ -1907,7 +2075,19 @@ function attachLocalTracksToPc(pc) {
     for (const track of localStream.getTracks()) {
         const alreadySent = senders.some(s => s.track === track);
         if (!alreadySent) {
-            pc.addTrack(track, localStream);
+            const sender = pc.addTrack(track, localStream);
+            // Ограничиваем битрейт видео до 160 Кбит/с и 15 FPS, чтобы при 4-6 игроках не нагружать CPU
+            if (track.kind === "video" && sender && typeof sender.getParameters === "function") {
+                try {
+                    const params = sender.getParameters();
+                    if (!params.encodings || params.encodings.length === 0) {
+                        params.encodings = [{}];
+                    }
+                    params.encodings[0].maxBitrate = 160000;
+                    params.encodings[0].maxFramerate = 15;
+                    sender.setParameters(params).catch(() => {});
+                } catch (_) {}
+            }
         }
     }
 }
@@ -1952,9 +2132,14 @@ function syncWebrtcPeers(players) {
         const shouldConnect = myHasMedia || peerHasMedia;
 
         if (!shouldConnect) {
+            peerRetryCounts.delete(p.id);
             if (peerConnections.has(p.id)) {
                 closePeer(p.id);
             }
+            continue;
+        }
+
+        if ((peerRetryCounts.get(p.id) || 0) > MAX_P2P_RETRIES) {
             continue;
         }
 

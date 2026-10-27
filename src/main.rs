@@ -74,6 +74,9 @@ enum ClientWsMessage {
         video: bool,
         audio: bool,
     },
+    UpdateAvatar {
+        avatar_url: Option<String>,
+    },
     MediaDiag {
         level: String,
         message: String,
@@ -380,6 +383,11 @@ async fn handle_socket(
                     );
                     let mut room = room_handle.room.lock().await;
                     room.update_media_state(&player_id, video, audio);
+                    broadcast_room_state(&room, &room_handle.clients);
+                }
+                Ok(ClientWsMessage::UpdateAvatar { avatar_url }) => {
+                    let mut room = room_handle.room.lock().await;
+                    room.update_avatar(&player_id, avatar_url);
                     broadcast_room_state(&room, &room_handle.clients);
                 }
                 Ok(ClientWsMessage::MediaDiag { level, message }) => {
