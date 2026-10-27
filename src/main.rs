@@ -125,54 +125,31 @@ async fn main() {
         rooms: Arc::new(DashMap::new()),
     };
 
-    // Default rooms in Lobby
-    {
-        let sng_cfg = GamePreset::SngStandard.build_config(Some(10), Some(1500), Some(5));
-        let sng_room = PokerRoom::new_with_preset(
-            "friends-sng".to_string(),
-            "Турнир друзей (Sit & Go) 🏆".to_string(),
-            sng_cfg,
-        );
-        state.rooms.insert(
-            "friends-sng".to_string(),
-            Arc::new(RoomHandle {
-                room: Mutex::new(sng_room),
-                clients: DashMap::new(),
-            }),
-        );
-
-        let cash_cfg = GamePreset::Cash.build_config(Some(10), Some(1000), None);
-        let cash_room = PokerRoom::new_with_preset(
-            "friends-cash".to_string(),
-            "Кэш-стол без таймера ♠️".to_string(),
-            cash_cfg,
-        );
-        state.rooms.insert(
-            "friends-cash".to_string(),
-            Arc::new(RoomHandle {
-                room: Mutex::new(cash_room),
-                clients: DashMap::new(),
-            }),
-        );
-    }
-
     // Background 1-second ticker for:
     // - Turn timeouts (45s)
     // - Automatic next hand deal after Showdown (6s pause)
+    // - Auto-kicking offline players (> 60s disconnected)
+    // - Auto-closing empty rooms with no players
     let ticker_state = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
             interval.tick().await;
+            let mut rooms_to_remove = Vec::new();
             for entry in ticker_state.rooms.iter() {
+                let room_id = entry.key().clone();
                 let handle = entry.value().clone();
-                if handle.clients.is_empty() {
-                    continue;
-                }
                 let mut room = handle.room.lock().await;
-                if room.check_timers() {
+                if room.check_timers() && !handle.clients.is_empty() {
                     broadcast_room_state(&room, &handle.clients);
                 }
+                if handle.clients.is_empty() && room.should_auto_close() {
+                    rooms_to_remove.push((room_id, room.room_name.clone()));
+                }
+            }
+            for (room_id, room_name) in rooms_to_remove {
+                ticker_state.rooms.remove(&room_id);
+                info!("🗑 Стол '{}' ({}) автоматически закрыт (нет игроков)", room_name, room_id);
             }
         }
     });
@@ -461,10 +438,17 @@ async fn handle_socket(
 
     room_handle.clients.remove(&player_id);
     send_task.abort();
-    if !left_explicitly {
+    let should_remove_room = {
         let mut room = room_handle.room.lock().await;
-        room.set_player_disconnected(&player_id);
-        broadcast_room_state(&room, &room_handle.clients);
+        if !left_explicitly {
+            room.set_player_disconnected(&player_id);
+            broadcast_room_state(&room, &room_handle.clients);
+        }
+        room_handle.clients.is_empty() && room.should_auto_close()
+    };
+    if should_remove_room {
+        state.rooms.remove(&room_id);
+        info!("🗑 Стол '{}' закрыт после выхода последнего игрока", room_id);
     }
 }
 

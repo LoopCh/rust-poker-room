@@ -9,6 +9,8 @@ pub const MAX_SEATS: usize = 6;
 pub const TURN_TIMEOUT_SECS: u64 = 45;
 pub const AUTO_DEAL_DELAY_SECS: u64 = 6;
 pub const RUNOUT_STREET_DELAY_SECS: u64 = 2;
+pub const OFFLINE_AUTO_KICK_SECS: u64 = 60;
+pub const EMPTY_ROOM_TTL_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -146,6 +148,8 @@ pub struct Player {
     pub folded: bool,
     pub all_in: bool,
     pub connected: bool,
+    #[serde(skip)]
+    pub disconnected_at: Option<Instant>,
     pub sitting_out: bool,
     pub left_voluntarily: bool,
     pub video_enabled: bool,
@@ -238,6 +242,8 @@ pub struct PokerRoom {
     pub room_name: String,
     pub preset_name: String,
     pub host_id: String,
+    pub created_at: Instant,
+    pub had_players: bool,
     pub stage: GameStage,
     pub all_in_runout: bool,
     pub dramatic_runout: bool,
@@ -297,6 +303,8 @@ impl PokerRoom {
             room_name,
             preset_name: config.preset_name,
             host_id: String::new(),
+            created_at: Instant::now(),
+            had_players: false,
             stage: GameStage::Waiting,
             all_in_runout: false,
             dramatic_runout: true,
@@ -375,8 +383,10 @@ impl PokerRoom {
     }
 
     pub fn add_or_reconnect_player(&mut self, player_id: String, name: String) -> Result<usize, String> {
+        self.had_players = true;
         if let Some(existing) = self.players.iter_mut().find(|p| p.id == player_id) {
             existing.connected = true;
+            existing.disconnected_at = None;
             existing.left_voluntarily = false;
             existing.name = name.clone();
             let seat = existing.seat;
@@ -409,6 +419,7 @@ impl PokerRoom {
             folded: in_active_hand,
             all_in: false,
             connected: true,
+            disconnected_at: None,
             sitting_out: false,
             left_voluntarily: false,
             video_enabled: false,
@@ -558,6 +569,7 @@ impl PokerRoom {
                 return;
             }
             p.connected = false;
+            p.disconnected_at = Some(Instant::now());
             p.video_enabled = false;
             p.audio_enabled = false;
             player_seat = Some(p.seat);
@@ -616,11 +628,58 @@ impl PokerRoom {
         }
     }
 
+    pub fn auto_kick_expired_offline_players(&mut self) -> usize {
+        if !matches!(self.stage, GameStage::Waiting | GameStage::Showdown) {
+            return 0;
+        }
+
+        let mut kicked_names = Vec::new();
+        self.players.retain(|p| {
+            if !p.connected {
+                let expired = p.left_voluntarily
+                    || p.disconnected_at
+                        .map(|t| t.elapsed().as_secs() >= OFFLINE_AUTO_KICK_SECS)
+                        .unwrap_or(false);
+                if expired {
+                    kicked_names.push(p.name.clone());
+                    return false;
+                }
+            }
+            true
+        });
+
+        let count = kicked_names.len();
+        for name in kicked_names {
+            self.push_log(format!(
+                "🧹 {} автоматически удален из-за стола (оффлайн > {}с)",
+                name, OFFLINE_AUTO_KICK_SECS
+            ));
+        }
+
+        if count > 0 {
+            if self.active_eligible_count() < 2 {
+                self.stage = GameStage::Waiting;
+                self.showdown_started_at = None;
+                self.set_turn_seat(None);
+            }
+            self.ensure_valid_host();
+        }
+        count
+    }
+
+    pub fn should_auto_close(&self) -> bool {
+        self.players.is_empty()
+            && (self.had_players || self.created_at.elapsed().as_secs() >= EMPTY_ROOM_TTL_SECS)
+    }
+
     /// Periodic 1-second check for:
+    /// 0) Auto-kicking offline players (> 60s disconnected) between hands
     /// 1) Dramatic street-by-street All-In Runout (every 2s)
     /// 2) Turn inactivity timeout (45s)
     /// 3) Auto-starting the next hand after Showdown (6s pause)
     pub fn check_timers(&mut self) -> bool {
+        let changed = self.auto_kick_expired_offline_players() > 0;
+
         // 1. Dramatic street-by-street All-In Runout when nobody can bet anymore
         if self.all_in_runout && !matches!(self.stage, GameStage::Waiting | GameStage::Showdown) {
             if let Some(step_at) = self.runout_step_started_at {
@@ -629,7 +688,7 @@ impl PokerRoom {
                     return true;
                 }
             }
-            return false;
+            return changed;
         }
 
         // 2. Check active turn timeout
@@ -646,12 +705,12 @@ impl PokerRoom {
                                 PlayerAction::Fold
                             };
                             self.push_log(format!("⏰ Время хода {} истекло", p.name));
-                            return self.handle_action(&pid, default_action).is_ok();
+                            return self.handle_action(&pid, default_action).is_ok() || changed;
                         }
                     }
                 }
             }
-            return false;
+            return changed;
         }
 
         // 3. Check automatic next hand deal after Showdown
@@ -659,7 +718,7 @@ impl PokerRoom {
             if let Some(showdown_at) = self.showdown_started_at {
                 if showdown_at.elapsed().as_secs() >= AUTO_DEAL_DELAY_SECS {
                     if self.active_eligible_count() >= 2 {
-                        return self.start_new_hand().is_ok();
+                        return self.start_new_hand().is_ok() || changed;
                     } else {
                         self.showdown_started_at = None;
                     }
@@ -667,7 +726,7 @@ impl PokerRoom {
             }
         }
 
-        false
+        changed
     }
 
     fn advance_single_runout_street(&mut self) {
@@ -1123,6 +1182,7 @@ impl PokerRoom {
             p.bet_in_round = 0;
         }
         self.players.retain(|p| !p.left_voluntarily);
+        self.auto_kick_expired_offline_players();
         self.ensure_valid_host();
     }
 
@@ -1818,5 +1878,35 @@ mod tests {
 
         room.leave_player("p2");
         assert_eq!(room.players.len(), 1);
+    }
+
+    #[test]
+    fn test_auto_kick_offline_and_auto_close_empty_room() {
+        let mut room = PokerRoom::new("test".into(), "Cleanup Test".into(), 10, 20, 1000);
+        // Newly created room should not auto-close immediately (30s grace period for creator to connect)
+        assert!(!room.should_auto_close());
+
+        room.add_or_reconnect_player("p1".into(), "Alice".into())
+            .unwrap();
+        room.add_or_reconnect_player("p2".into(), "Bob".into())
+            .unwrap();
+        assert!(!room.should_auto_close());
+
+        // Bob disconnects; before 60s expires, he is not auto-kicked
+        room.set_player_disconnected("p2");
+        assert!(!room.check_timers());
+        assert_eq!(room.players.len(), 2);
+
+        // Simulate 61 seconds of offline state for Bob
+        room.players[1].disconnected_at =
+            Some(Instant::now() - std::time::Duration::from_secs(OFFLINE_AUTO_KICK_SECS + 1));
+        assert!(room.check_timers());
+        assert_eq!(room.players.len(), 1);
+        assert_eq!(room.players[0].id, "p1");
+
+        // When the last player leaves, the room immediately qualifies for auto-close
+        room.leave_player("p1");
+        assert!(room.players.is_empty());
+        assert!(room.should_auto_close());
     }
 }
