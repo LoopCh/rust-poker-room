@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Безопасная настройка VPS (Ubuntu / Debian) для RustHoldem рядом с нодой Xray
-# Поддерживает как работу по домену (Let's Encrypt SSL без предупреждений браузера), так и по IP.
-# Запуск с доменом: sudo bash setup-vps.sh poker.vikhr.online
-# Запуск без домена: sudo bash setup-vps.sh
+# Не занимает порты 80 и 443 (не конфликтует с Xray) и гарантированно поднимает HTTPS на порту 8443.
+# Запуск: sudo bash setup-vps.sh [ваш-домен]
 
 set -euo pipefail
 
-DOMAIN="${1:-}"
+DOMAIN="${1:-poker.vikhr.online}"
 BINARY_PATH="/usr/local/bin/rust-poker-room"
 SERVICE_NAME="rust-poker"
 VPS_IP=$(curl -s4 ifconfig.me || hostname -I | awk '{print $1}')
@@ -35,79 +34,46 @@ systemctl daemon-reload
 systemctl enable ${SERVICE_NAME}
 
 if ! command -v caddy &>/dev/null; then
-    echo "=== Установка Caddy ==="
+    echo "=== 2. Установка Caddy ==="
     apt-get update
-    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl openssl
     curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
     curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
     apt-get update
     apt-get install -y caddy
 fi
 
-# Проверяем, занят ли порт 443 другим процессом (например, Xray)
-PORT_443_BUSY=0
-if ss -tlnp | grep -v "caddy" | grep -q ':443 '; then
-    PORT_443_BUSY=1
-fi
+echo "=== 3. Генерация SSL-сертификата для ${DOMAIN} и ${VPS_IP} (порт 8443) ==="
+openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+    -keyout /etc/caddy/poker.key \
+    -out /etc/caddy/poker.crt \
+    -subj "/CN=${DOMAIN}" \
+    -addext "subjectAltName=DNS:${DOMAIN},IP:${VPS_IP}"
 
-if [ -n "$DOMAIN" ]; then
-    if [ "$PORT_443_BUSY" -eq 1 ]; then
-        echo "ℹ️ Порт 443 занят (Xray). Настраиваем официальный Let's Encrypt SSL для ${DOMAIN} на порту 8443 (через HTTP-01 на порту 80)..."
-        cat >/etc/caddy/Caddyfile <<EOF
+chown caddy:caddy /etc/caddy/poker.key /etc/caddy/poker.crt || true
+chmod 600 /etc/caddy/poker.key
+chmod 644 /etc/caddy/poker.crt
+
+cat >/etc/caddy/Caddyfile <<EOF
 {
-    http_port 80
-    https_port 8443
-    auto_https disable_redirects
+    auto_https off
 }
 
-${DOMAIN}:8443 {
-    tls {
-        issuer acme {
-            disable_tlsalpn_challenge
-        }
-    }
+https://${DOMAIN}:8443, https://${VPS_IP}:8443 {
+    tls /etc/caddy/poker.crt /etc/caddy/poker.key
     encode zstd gzip
     reverse_proxy 127.0.0.1:3000
 }
 EOF
-        TARGET_URL="https://${DOMAIN}:8443"
-    else
-        echo "✅ Порт 443 свободен. Настраиваем стандартный HTTPS для ${DOMAIN}..."
-        cat >/etc/caddy/Caddyfile <<EOF
-${DOMAIN} {
-    encode zstd gzip
-    reverse_proxy 127.0.0.1:3000
-}
-EOF
-        TARGET_URL="https://${DOMAIN}"
-    fi
-else
-    echo "ℹ️ Домен не указан. Настраиваем самоподписанный HTTPS по IP на порту 8443..."
-    cat >/etc/caddy/Caddyfile <<EOF
-{
-    auto_https disable_redirects
-    http_port 8088
-    https_port 8443
-}
-
-https://:8443 {
-    tls internal
-    encode zstd gzip
-    reverse_proxy 127.0.0.1:3000
-}
-EOF
-    TARGET_URL="https://${VPS_IP}:8443"
-fi
 
 systemctl restart caddy
 
 if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
-    ufw allow 80/tcp
     ufw allow 3000/tcp
     ufw allow 8443/tcp
 fi
 
 echo ""
-echo "🎉 Готово! Конфигурация Caddy перезапущена."
-echo "👉 Открывайте покерный клуб с рабочей камерой и микрофоном по ссылке:"
-echo "   ${TARGET_URL}"
+echo "🎉 Готово! Порты 80 и 443 (Xray) не затронуты."
+echo "👉 Открывайте покер с работающей камерой и микрофоном:"
+echo "   https://${DOMAIN}:8443"

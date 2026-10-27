@@ -367,7 +367,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     const isFourColor = localStorage.getItem(STORAGE_KEY_4COLOR) === "1";
     document.body.classList.toggle("four-color-deck", isFourColor);
-    deckColorBtn.textContent = isFourColor ? "🃏 4-цвет" : "🃏 2-цвет";
+    deckColorBtn.textContent = isFourColor ? "🃏 Масти: 4 цвета" : "🃏 Масти: 2 цвета";
     deckColorBtn.classList.toggle("active", isFourColor);
 
     toggleSoundBtn.textContent = soundEnabled ? "🔊 Звук" : "🔇 Без звука";
@@ -420,7 +420,7 @@ deckColorBtn.addEventListener("click", () => {
     const enabled = !document.body.classList.contains("four-color-deck");
     document.body.classList.toggle("four-color-deck", enabled);
     localStorage.setItem(STORAGE_KEY_4COLOR, enabled ? "1" : "0");
-    deckColorBtn.textContent = enabled ? "🃏 4-цвет" : "🃏 2-цвет";
+    deckColorBtn.textContent = enabled ? "🃏 Масти: 4 цвета" : "🃏 Масти: 2 цвета";
     deckColorBtn.classList.toggle("active", enabled);
 });
 
@@ -636,10 +636,14 @@ function initSeatDOM() {
                     <div class="blind-badge hidden" id="seat-blind-${pos}">SB</div>
                 </div>
                 <div class="seat-emoji-layer" id="seat-emoji-${pos}"></div>
-                <div class="seat-media-wrap">
-                    <video class="seat-video" id="seat-video-${pos}" autoplay playsinline></video>
-                    <div class="seat-avatar-placeholder" id="seat-avatar-${pos}">?</div>
-                    <div class="seat-hole-cards" id="seat-cards-${pos}"></div>
+                <div class="seat-main-row">
+                    <div class="seat-media-wrap">
+                        <video class="seat-video" id="seat-video-${pos}" autoplay playsinline></video>
+                        <div class="seat-avatar-placeholder" id="seat-avatar-${pos}">?</div>
+                    </div>
+                    <div class="seat-cards-panel">
+                        <div class="seat-hole-cards" id="seat-cards-${pos}"></div>
+                    </div>
                 </div>
                 <div class="seat-info-row">
                     <span class="seat-name" id="seat-name-${pos}">Игрок</span>
@@ -718,7 +722,7 @@ function handleRoomStateUpdate(state) {
         sitOutBtn.textContent = me.sitting_out ? "☕ Вернуться за стол" : "☕ Отойти";
         sitOutBtn.classList.toggle("active", me.sitting_out);
     }
-    pauseGameBtn.textContent = state.paused ? "▶️ Продолжить" : "⏸ Авто-раздача";
+    pauseGameBtn.textContent = state.paused ? "⏸ Авто-раздача: ВЫКЛ" : "🔁 Авто-раздача: ВКЛ";
     pauseGameBtn.classList.toggle("active", !state.paused);
 
     const winningCardKeys = new Set();
@@ -851,14 +855,21 @@ function handleRoomStateUpdate(state) {
 
         const cardsContainer = document.getElementById(`seat-cards-${pos}`);
         cardsContainer.innerHTML = "";
-        player.hole_cards.forEach((c, idx) => {
-            const animateHole =
-                isNewHand ||
-                ((state.stage === "showdown" || state.all_in_runout) &&
-                    player.id !== myPlayerId &&
-                    c !== null);
-            cardsContainer.appendChild(renderCardElement(c, true, animateHole, idx * 70, winningCardKeys));
-        });
+        if (player.hole_cards.length === 0) {
+            const emptyHint = document.createElement("div");
+            emptyHint.className = "seat-cards-empty";
+            emptyHint.textContent = player.folded ? "Пас" : "Ожидание\nраздачи";
+            cardsContainer.appendChild(emptyHint);
+        } else {
+            player.hole_cards.forEach((c, idx) => {
+                const animateHole =
+                    isNewHand ||
+                    ((state.stage === "showdown" || state.all_in_runout) &&
+                        player.id !== myPlayerId &&
+                        c !== null);
+                cardsContainer.appendChild(renderCardElement(c, true, animateHole, idx * 70, winningCardKeys));
+            });
+        }
 
         const videoEl = document.getElementById(`seat-video-${pos}`);
         const avatarEl = document.getElementById(`seat-avatar-${pos}`);
@@ -1317,6 +1328,16 @@ async function syncLocalMediaAndRenegotiate() {
     if (!videoEnabled && !audioEnabled) {
         logMediaDiag("info", "Камера и микрофон выключены пользователем.");
         stopLocalMedia();
+        for (const [peerId, pc] of peerConnections.entries()) {
+            for (const sender of pc.getSenders()) {
+                if (sender.track) {
+                    try {
+                        pc.removeTrack(sender);
+                    } catch (_) {}
+                }
+            }
+            await negotiateWithPeer(peerId, pc);
+        }
     } else if (localStream) {
         localStream.getVideoTracks().forEach(t => (t.enabled = videoEnabled));
         localStream.getAudioTracks().forEach(t => (t.enabled = audioEnabled));
@@ -1383,7 +1404,13 @@ function getOrCreatePeerConnection(peerId) {
 
     const pc = new RTCPeerConnection(RTC_CONFIG);
     peerConnections.set(peerId, pc);
-    peerStates.set(peerId, { makingOffer: false, ignoreOffer: false });
+    peerStates.set(peerId, {
+        makingOffer: false,
+        ignoreOffer: false,
+        isSettingRemoteAnswerPending: false,
+        pendingCandidates: [],
+        disconnectTimer: null
+    });
 
     attachLocalTracksToPc(pc);
 
@@ -1401,17 +1428,28 @@ function getOrCreatePeerConnection(peerId) {
     pc.oniceconnectionstatechange = () => {
         const st = pc.iceConnectionState;
         const pName = getPeerName(peerId);
+        const state = peerStates.get(peerId);
+
         if (st === "connected" || st === "completed") {
-            logMediaDiag("ok", `P2P видео/аудио канал с "${pName}" успешно установлен (${st})!`, false);
-        } else if (st === "failed" || st === "disconnected") {
-            logMediaDiag(
-                "warn",
-                `P2P соединение с "${pName}" перешло в статус "${st}". Пробуем перезапустить ICE...`
-            );
-            if (typeof pc.restartIce === "function") {
-                pc.restartIce();
-                negotiateWithPeer(peerId, pc);
+            if (state && state.disconnectTimer) {
+                clearTimeout(state.disconnectTimer);
+                state.disconnectTimer = null;
             }
+            logMediaDiag("ok", `P2P видео/аудио канал с "${pName}" успешно установлен (${st})!`, false);
+        } else if (st === "disconnected") {
+            if (state && !state.disconnectTimer) {
+                state.disconnectTimer = setTimeout(() => {
+                    if (!peerConnections.has(peerId)) return;
+                    const cur = pc.iceConnectionState;
+                    if (cur === "disconnected" || cur === "failed") {
+                        logMediaDiag("warn", `P2P с "${pName}" не восстановилось (${cur}), пересоздаем чистый канал...`, false);
+                        resetPeerConnection(peerId, true);
+                    }
+                }, 4500);
+            }
+        } else if (st === "failed") {
+            logMediaDiag("warn", `P2P соединение с "${pName}" прервалось (failed). Пересоздаем канал...`, false);
+            resetPeerConnection(peerId, true);
         }
     };
 
@@ -1439,6 +1477,23 @@ function getOrCreatePeerConnection(peerId) {
     return pc;
 }
 
+function resetPeerConnection(peerId, notifyRemote = false) {
+    closePeer(peerId);
+    if (notifyRemote) {
+        sendWs({
+            type: "webrtc_signal",
+            target_id: peerId,
+            signal_type: "reset",
+            payload: {}
+        });
+    }
+    if (roomState) {
+        setTimeout(() => {
+            if (roomState) syncWebrtcPeers(roomState.players);
+        }, 250);
+    }
+}
+
 function attachLocalTracksToPc(pc) {
     if (!localStream) return;
     const senders = pc.getSenders();
@@ -1452,7 +1507,9 @@ function attachLocalTracksToPc(pc) {
 
 async function negotiateWithPeer(peerId, pc) {
     const state = peerStates.get(peerId);
-    if (!state || state.makingOffer) return;
+    if (!state || state.makingOffer || state.isSettingRemoteAnswerPending) return;
+    if (pc.signalingState !== "stable") return;
+
     try {
         state.makingOffer = true;
         const offer = await pc.createOffer();
@@ -1474,73 +1531,141 @@ async function negotiateWithPeer(peerId, pc) {
 function syncWebrtcPeers(players) {
     const activeIds = new Set(players.filter(p => p.connected && p.id !== myPlayerId).map(p => p.id));
 
-    for (const peerId of peerConnections.keys()) {
+    for (const peerId of Array.from(peerConnections.keys())) {
         if (!activeIds.has(peerId)) {
             closePeer(peerId);
         }
     }
 
+    const myHasMedia = videoEnabled || audioEnabled;
+
     for (const p of players) {
         if (p.id === myPlayerId || !p.connected) continue;
-        const shouldConnect = videoEnabled || audioEnabled || p.video_enabled || p.audio_enabled;
-        if (shouldConnect && !peerConnections.has(p.id)) {
-            const pc = getOrCreatePeerConnection(p.id);
-            if (myPlayerId < p.id || videoEnabled || audioEnabled) {
+        const peerHasMedia = p.video_enabled || p.audio_enabled;
+        const shouldConnect = myHasMedia || peerHasMedia;
+
+        if (!shouldConnect) {
+            if (peerConnections.has(p.id)) {
+                closePeer(p.id);
+            }
+            continue;
+        }
+
+        if (!peerConnections.has(p.id)) {
+            // Чтобы оба браузера не слали Offer одновременно (и пустой Offer без треков не ломал DTLS SSL role):
+            // 1. Если медиа включено только у нас — создаем соединение и отправляем Offer мы.
+            // 2. Если медиа включено у обоих — инициатором выступает только один (myPlayerId > p.id).
+            // 3. Если медиа включено только у собеседника — мы ждем входящий Offer от него в handleWebrtcSignal.
+            const iAmInitiator =
+                (myHasMedia && !peerHasMedia) ||
+                (myHasMedia && peerHasMedia && myPlayerId > p.id);
+
+            if (iAmInitiator) {
+                const pc = getOrCreatePeerConnection(p.id);
                 negotiateWithPeer(p.id, pc);
             }
         }
     }
 }
 
+async function flushPendingCandidates(peerId, pc, state) {
+    if (!state || !state.pendingCandidates.length || !pc.remoteDescription) return;
+    const queue = state.pendingCandidates.splice(0, state.pendingCandidates.length);
+    for (const cand of queue) {
+        try {
+            await pc.addIceCandidate(new RTCIceCandidate(cand));
+        } catch (_) {}
+    }
+}
+
 async function handleWebrtcSignal(fromId, signalType, payload) {
+    if (signalType === "reset") {
+        closePeer(fromId);
+        if (roomState && (videoEnabled || audioEnabled)) {
+            setTimeout(() => {
+                if (roomState) syncWebrtcPeers(roomState.players);
+            }, 300);
+        }
+        return;
+    }
+
     const pc = getOrCreatePeerConnection(fromId);
     const state = peerStates.get(fromId);
     const polite = myPlayerId < fromId;
 
     try {
-        if (signalType === "offer" || signalType === "answer") {
+        if (signalType === "offer") {
             const description = new RTCSessionDescription(payload);
-            const offerCollision =
-                signalType === "offer" &&
-                (state.makingOffer || pc.signalingState !== "stable");
+            const readyForOffer =
+                !state.makingOffer &&
+                (pc.signalingState === "stable" || state.isSettingRemoteAnswerPending);
+            const offerCollision = !readyForOffer;
 
             state.ignoreOffer = !polite && offerCollision;
             if (state.ignoreOffer) {
-                logMediaDiag("info", `Разрешение коллизии Offer с "${getPeerName(fromId)}" (impolite peer).`, false);
                 return;
             }
 
-            await pc.setRemoteDescription(description);
-            if (signalType === "offer") {
-                attachLocalTracksToPc(pc);
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                sendWs({
-                    type: "webrtc_signal",
-                    target_id: fromId,
-                    signal_type: "answer",
-                    payload: pc.localDescription
-                });
+            if (offerCollision) {
+                await pc.setLocalDescription({ type: "rollback" });
             }
+            await pc.setRemoteDescription(description);
+            await flushPendingCandidates(fromId, pc, state);
+
+            attachLocalTracksToPc(pc);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            sendWs({
+                type: "webrtc_signal",
+                target_id: fromId,
+                signal_type: "answer",
+                payload: pc.localDescription
+            });
+        } else if (signalType === "answer") {
+            if (pc.signalingState !== "have-local-offer") {
+                // Игнорируем устаревший/дублирующий Answer, чтобы не вызывать ошибку DTLS SSL role
+                return;
+            }
+            const description = new RTCSessionDescription(payload);
+            state.isSettingRemoteAnswerPending = true;
+            try {
+                await pc.setRemoteDescription(description);
+            } finally {
+                state.isSettingRemoteAnswerPending = false;
+            }
+            await flushPendingCandidates(fromId, pc, state);
         } else if (signalType === "ice") {
             if (payload) {
-                try {
-                    await pc.addIceCandidate(new RTCIceCandidate(payload));
-                } catch (err) {
-                    if (!state.ignoreOffer) {
-                        logMediaDiag("warn", `Предупреждение ICE от "${getPeerName(fromId)}": ${err.message}`, false);
+                if (!pc.remoteDescription || !pc.remoteDescription.type) {
+                    state.pendingCandidates.push(payload);
+                } else {
+                    try {
+                        await pc.addIceCandidate(new RTCIceCandidate(payload));
+                    } catch (err) {
+                        if (!state.ignoreOffer) {
+                            logMediaDiag("warn", `Предупреждение ICE от "${getPeerName(fromId)}": ${err.message}`, false);
+                        }
                     }
                 }
             }
         }
     } catch (e) {
-        logMediaDiag("error", `Ошибка обработки WebRTC сигнала (${signalType}) от "${getPeerName(fromId)}": ${e.message}`);
+        logMediaDiag("warn", `Перезапуск P2P-канала с "${getPeerName(fromId)}" после рассинхронизации SDP (${e.message})`, false);
+        resetPeerConnection(fromId, true);
     }
 }
 
 function closePeer(peerId) {
+    const state = peerStates.get(peerId);
+    if (state && state.disconnectTimer) {
+        clearTimeout(state.disconnectTimer);
+    }
     const pc = peerConnections.get(peerId);
     if (pc) {
+        pc.onicecandidate = null;
+        pc.oniceconnectionstatechange = null;
+        pc.ontrack = null;
+        pc.onconnectionstatechange = null;
         pc.close();
         peerConnections.delete(peerId);
     }
