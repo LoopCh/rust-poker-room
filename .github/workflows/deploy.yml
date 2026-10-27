@@ -16,6 +16,7 @@ jobs:
   test-and-build:
     name: Test & Build Static Linux Binary
     runs-on: ubuntu-latest
+    environment: PROD
 
     steps:
       - name: Checkout repository
