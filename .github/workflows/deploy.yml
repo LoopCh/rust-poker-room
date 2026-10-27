@@ -81,26 +81,25 @@ jobs:
               sudo apt-get update -y && sudo apt-get install -y coturn
               sudo sed -i 's/^#*TURNSERVER_ENABLED=.*/TURNSERVER_ENABLED=1/' /etc/default/coturn 2>/dev/null || echo 'TURNSERVER_ENABLED=1' | sudo tee /etc/default/coturn >/dev/null
               PUB_IP=\$(curl -s4 ifconfig.me || hostname -I | awk '{print \$1}')
-              sudo tee /etc/turnserver.conf >/dev/null <<EOF
-# RustHoldem WebRTC TURN Relay (coturn)
-listening-port=3478
-fingerprint
-lt-cred-mech
-user=poker:rustholdem_turn_2026
-realm=poker.vikhr.online
-external-ip=\$PUB_IP
-min-port=49152
-max-port=49252
-max-bps=250000
-no-multicast-peers
-no-loopback-peers
-no-cli
-no-tlsv1
-no-tlsv1_1
-denied-peer-ip=10.0.0.0-10.255.255.255
-denied-peer-ip=192.168.0.0-192.168.255.255
-denied-peer-ip=172.16.0.0-172.31.255.255
-EOF
+              printf '%s\n' \
+                'listening-port=3478' \
+                'fingerprint' \
+                'lt-cred-mech' \
+                'user=poker:rustholdem_turn_2026' \
+                'realm=poker.vikhr.online' \
+                \"external-ip=\$PUB_IP\" \
+                'min-port=49152' \
+                'max-port=49252' \
+                'max-bps=250000' \
+                'no-multicast-peers' \
+                'no-loopback-peers' \
+                'no-cli' \
+                'no-tlsv1' \
+                'no-tlsv1_1' \
+                'denied-peer-ip=10.0.0.0-10.255.255.255' \
+                'denied-peer-ip=192.168.0.0-192.168.255.255' \
+                'denied-peer-ip=172.16.0.0-172.31.255.255' \
+                | sudo tee /etc/turnserver.conf >/dev/null
               sudo systemctl enable coturn
               sudo systemctl restart coturn
               if command -v ufw >/dev/null 2>&1 && sudo ufw status | grep -q 'Status: active'; then
