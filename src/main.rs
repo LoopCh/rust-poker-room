@@ -12,7 +12,7 @@ use axum::{
 };
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
-use room::{GamePreset, PlayerAction, PokerRoom, RoomStateView, RoomSummary};
+use room::{GamePreset, PlayerAction, PokerRoom, RebuyMode, RoomStateView, RoomSummary};
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, Mutex};
@@ -37,6 +37,7 @@ pub struct CreateRoomReq {
     pub small_blind: Option<u64>,
     pub starting_chips: Option<u64>,
     pub level_mins: Option<u64>,
+    pub rebuy_mode: Option<RebuyMode>,
 }
 
 #[derive(Serialize)]
@@ -222,7 +223,12 @@ async fn create_room_handler(
     };
 
     let preset = req.preset.unwrap_or_default();
-    let config = preset.build_config(req.small_blind, req.starting_chips, req.level_mins);
+    let config = preset.build_config_with_rebuy(
+        req.small_blind,
+        req.starting_chips,
+        req.level_mins,
+        req.rebuy_mode,
+    );
 
     let room = PokerRoom::new_with_preset(room_id.clone(), room_name, config);
     state.rooms.insert(

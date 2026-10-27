@@ -39,6 +39,17 @@ impl Default for GamePreset {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RebuyMode {
+    /// На выбывание (Freezeout): проигравший стек выбывает до конца турнира (без докупки)
+    Freezeout,
+    /// Ручная докупка: проигравший может сам нажать кнопку «🪙 Докупить стек»
+    Manual,
+    /// Авто-ребай: стек автоматически пополняется в начале следующей раздачи
+    Auto,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct BlindLevel {
     pub level: usize,
@@ -53,7 +64,7 @@ pub struct PresetConfig {
     pub starting_chips: u64,
     pub level_duration_secs: Option<u64>,
     pub levels: Vec<BlindLevel>,
-    pub allow_rebuy: bool,
+    pub rebuy_mode: RebuyMode,
 }
 
 impl GamePreset {
@@ -62,6 +73,16 @@ impl GamePreset {
         custom_sb: Option<u64>,
         custom_chips: Option<u64>,
         custom_level_mins: Option<u64>,
+    ) -> PresetConfig {
+        self.build_config_with_rebuy(custom_sb, custom_chips, custom_level_mins, None)
+    }
+
+    pub fn build_config_with_rebuy(
+        self,
+        custom_sb: Option<u64>,
+        custom_chips: Option<u64>,
+        custom_level_mins: Option<u64>,
+        custom_rebuy_mode: Option<RebuyMode>,
     ) -> PresetConfig {
         let base_sb = custom_sb.unwrap_or(10).max(1);
         let raw_ladder: &[(u64, u64, u64)] = match self {
@@ -112,12 +133,12 @@ impl GamePreset {
             })
             .collect();
 
-        let (default_chips, default_mins, name, allow_rebuy) = match self {
-            GamePreset::Cash => (base_sb * 100, None, "💵 Кэш-игра", true),
-            GamePreset::SngStandard => (base_sb * 150, Some(5), "🏆 Турнир Sit & Go", true),
-            GamePreset::SngTurbo => (base_sb * 150, Some(3), "⚡ Турбо Sit & Go", true),
-            GamePreset::HyperTurbo => (base_sb * 50, Some(2), "🔥 Гипер-Турбо (Spin)", true),
-            GamePreset::DeepstackAnte => (base_sb * 300, Some(6), "👑 Хайроллер с Анте", true),
+        let (default_chips, default_mins, name, default_rebuy) = match self {
+            GamePreset::Cash => (base_sb * 100, None, "💵 Кэш-игра", RebuyMode::Manual),
+            GamePreset::SngStandard => (base_sb * 150, Some(5), "🏆 Турнир Sit & Go", RebuyMode::Freezeout),
+            GamePreset::SngTurbo => (base_sb * 150, Some(3), "⚡ Турбо Sit & Go", RebuyMode::Freezeout),
+            GamePreset::HyperTurbo => (base_sb * 50, Some(2), "🔥 Гипер-Турбо (Spin)", RebuyMode::Freezeout),
+            GamePreset::DeepstackAnte => (base_sb * 300, Some(6), "👑 Хайроллер с Анте", RebuyMode::Freezeout),
         };
 
         let level_duration_secs = match self {
@@ -131,7 +152,7 @@ impl GamePreset {
             starting_chips: custom_chips.unwrap_or(default_chips).max(base_sb * 20),
             level_duration_secs,
             levels,
-            allow_rebuy,
+            rebuy_mode: custom_rebuy_mode.unwrap_or(default_rebuy),
         }
     }
 }
@@ -219,6 +240,7 @@ pub struct RoomStateView {
     pub room_id: String,
     pub room_name: String,
     pub preset_name: String,
+    pub rebuy_mode: RebuyMode,
     pub host_id: String,
     pub stage: GameStage,
     pub all_in_runout: bool,
@@ -269,6 +291,8 @@ pub struct PokerRoom {
     pub room_id: String,
     pub room_name: String,
     pub preset_name: String,
+    pub rebuy_mode: RebuyMode,
+    pub eliminated_ids: HashSet<String>,
     pub host_id: String,
     pub created_at: Instant,
     pub had_players: bool,
@@ -322,16 +346,28 @@ pub enum PlayerAction {
 impl PokerRoom {
     pub fn new_with_preset(room_id: String, room_name: String, config: PresetConfig) -> Self {
         let first = config.levels[0];
+        let rebuy_desc = match config.rebuy_mode {
+            RebuyMode::Freezeout => "На выбывание (без докупки)",
+            RebuyMode::Manual => "Ручная докупка",
+            RebuyMode::Auto => "Авто-ребай",
+        };
         let mode_desc = if let Some(secs) = config.level_duration_secs {
-            format!("{} (рост блайндов каждые {} мин)", config.preset_name, secs / 60)
+            format!(
+                "{} (рост каждые {} мин • {})",
+                config.preset_name,
+                secs / 60,
+                rebuy_desc
+            )
         } else {
-            config.preset_name.clone()
+            format!("{} ({})", config.preset_name, rebuy_desc)
         };
 
         Self {
             room_id,
             room_name,
             preset_name: config.preset_name,
+            rebuy_mode: config.rebuy_mode,
+            eliminated_ids: HashSet::new(),
             host_id: String::new(),
             created_at: Instant::now(),
             had_players: false,
@@ -446,16 +482,18 @@ impl PokerRoom {
             .ok_or_else(|| "За столом нет свободных мест (максимум 6 игроков)".to_string())?;
 
         let in_active_hand = !matches!(self.stage, GameStage::Waiting | GameStage::Showdown);
+        let was_eliminated =
+            self.rebuy_mode == RebuyMode::Freezeout && self.eliminated_ids.contains(&player_id);
 
         let player = Player {
             id: player_id.clone(),
             name: name.clone(),
             seat: free_seat,
-            chips: self.starting_chips,
+            chips: if was_eliminated { 0 } else { self.starting_chips },
             bet_in_round: 0,
             total_bet_in_hand: 0,
             hole_cards: Vec::new(),
-            folded: in_active_hand,
+            folded: in_active_hand || was_eliminated,
             all_in: false,
             connected: true,
             disconnected_at: None,
@@ -464,7 +502,9 @@ impl PokerRoom {
             video_enabled: false,
             audio_enabled: false,
             avatar_url: None,
-            last_action: if in_active_hand {
+            last_action: if was_eliminated {
+                Some("💀 Выбыл".to_string())
+            } else if in_active_hand {
                 Some("Ждет раздачи".to_string())
             } else {
                 None
@@ -644,7 +684,11 @@ impl PokerRoom {
     pub fn active_eligible_count(&self) -> usize {
         self.players
             .iter()
-            .filter(|p| p.connected && !p.sitting_out)
+            .filter(|p| {
+                p.connected
+                    && !p.sitting_out
+                    && (p.chips > 0 || self.rebuy_mode == RebuyMode::Auto)
+            })
             .count()
     }
 
@@ -698,7 +742,12 @@ impl PokerRoom {
         }
 
         if count > 0 {
-            if self.active_eligible_count() < 2 {
+            let connected_ready = self
+                .players
+                .iter()
+                .filter(|p| p.connected && !p.sitting_out)
+                .count();
+            if connected_ready < 2 {
                 self.stage = GameStage::Waiting;
                 self.showdown_started_at = None;
                 self.set_turn_seat(None);
@@ -877,6 +926,9 @@ impl PokerRoom {
     }
 
     pub fn rebuy(&mut self, player_id: &str) -> Result<(), String> {
+        if self.rebuy_mode == RebuyMode::Freezeout {
+            return Err("В режиме «На выбывание» докупка фишек отключена до конца турнира".to_string());
+        }
         if !matches!(self.stage, GameStage::Waiting | GameStage::Showdown) {
             return Err("Докупка фишек возможна только между раздачами".to_string());
         }
@@ -889,8 +941,12 @@ impl PokerRoom {
             return Err("У вас уже полный стартовый стек".to_string());
         }
         p.chips = self.starting_chips;
+        if p.last_action.as_deref() == Some("💀 Выбыл") || p.last_action.as_deref() == Some("Нет фишек (0)") {
+            p.last_action = None;
+        }
         let name = p.name.clone();
         let amount = self.starting_chips;
+        self.eliminated_ids.remove(player_id);
         self.push_log(format!("🪙 {} пополнил стек до {} фишек", name, amount));
         Ok(())
     }
@@ -898,12 +954,48 @@ impl PokerRoom {
     pub fn start_new_hand(&mut self) -> Result<(), String> {
         self.players.retain(|p| !p.left_voluntarily);
 
-        for p in &mut self.players {
-            if p.connected && !p.sitting_out && p.chips == 0 {
-                p.chips = self.starting_chips;
-                let name = p.name.clone();
-                let chips = self.starting_chips;
-                self.log.push(format!("🪙 Авто-ребай для {}: +{} фишек", name, chips));
+        if self.rebuy_mode == RebuyMode::Auto {
+            for p in &mut self.players {
+                if p.connected && !p.sitting_out && p.chips == 0 {
+                    p.chips = self.starting_chips;
+                    let name = p.name.clone();
+                    let chips = self.starting_chips;
+                    self.log.push(format!("🪙 Авто-ребай для {}: +{} фишек", name, chips));
+                }
+            }
+        } else if self.rebuy_mode == RebuyMode::Freezeout {
+            let with_chips_count = self
+                .players
+                .iter()
+                .filter(|p| p.connected && !p.sitting_out && p.chips > 0)
+                .count();
+            let ready_count = self
+                .players
+                .iter()
+                .filter(|p| p.connected && !p.sitting_out)
+                .count();
+
+            // If previous tournament ended (<= 1 survivor with chips) and >= 2 ready players are at the table,
+            // starting a hand launches a fresh tournament with full stacks and Level 1 blinds.
+            if with_chips_count < 2 && ready_count >= 2 {
+                self.eliminated_ids.clear();
+                for p in &mut self.players {
+                    if p.connected {
+                        p.chips = self.starting_chips;
+                        p.last_action = None;
+                    }
+                }
+                self.current_level_idx = 0;
+                if let Some(first_lvl) = self.levels.first().copied() {
+                    self.small_blind = first_lvl.small_blind;
+                    self.big_blind = first_lvl.big_blind;
+                    self.ante = first_lvl.ante;
+                }
+                self.level_started_at = Some(Instant::now());
+                self.push_log(format!(
+                    "🏆 Стартует новый турнир! Всем участникам выдан стартовый стек {} 🪙",
+                    self.starting_chips
+                ));
             }
         }
 
@@ -915,7 +1007,17 @@ impl PokerRoom {
             .collect();
 
         if eligible_seats.len() < 2 {
-            return Err("Для начала раздачи нужно минимум 2 активных игрока за столом".to_string());
+            return Err(match self.rebuy_mode {
+                RebuyMode::Freezeout => {
+                    "Для начала раздачи нужно минимум 2 игрока с фишками за столом".to_string()
+                }
+                RebuyMode::Manual => {
+                    "Недостаточно игроков с фишками (игроки с 0 фишек могут нажать «🪙 Докупить стек»)".to_string()
+                }
+                RebuyMode::Auto => {
+                    "Для начала раздачи нужно минимум 2 активных игрока за столом".to_string()
+                }
+            });
         }
 
         self.check_and_advance_blind_level();
@@ -953,6 +1055,10 @@ impl PokerRoom {
                 p.folded = true;
                 if p.sitting_out {
                     p.last_action = Some("Отошел ☕".to_string());
+                } else if p.chips == 0 && self.rebuy_mode == RebuyMode::Freezeout {
+                    p.last_action = Some("💀 Выбыл".to_string());
+                } else if p.chips == 0 {
+                    p.last_action = Some("Нет фишек (0)".to_string());
                 }
             }
         }
@@ -1308,6 +1414,37 @@ impl PokerRoom {
         self.record_last_hand_summary();
         self.players.retain(|p| !p.left_voluntarily);
         self.auto_kick_expired_offline_players();
+
+        if self.rebuy_mode == RebuyMode::Freezeout {
+            let mut newly_eliminated = Vec::new();
+            for p in &mut self.players {
+                if p.chips == 0 {
+                    p.last_action = Some("💀 Выбыл".to_string());
+                    if self.eliminated_ids.insert(p.id.clone()) {
+                        newly_eliminated.push(p.name.clone());
+                    }
+                }
+            }
+            for name in newly_eliminated {
+                self.push_log(format!("💀 {} выбывает из турнира!", name));
+            }
+
+            let survivors: Vec<(String, u64)> = self
+                .players
+                .iter()
+                .filter(|p| p.connected && !p.sitting_out && p.chips > 0)
+                .map(|p| (p.name.clone(), p.chips))
+                .collect();
+            if survivors.len() == 1 && !self.eliminated_ids.is_empty() {
+                let (champ_name, champ_chips) = &survivors[0];
+                self.push_log(format!(
+                    "🏆🎉 ТУРНИР ЗАВЕРШЕН! Чемпион стола: {} (стек: {} 🪙)!",
+                    champ_name, champ_chips
+                ));
+                self.showdown_started_at = None;
+            }
+        }
+
         self.ensure_valid_host();
     }
 
@@ -1684,6 +1821,7 @@ impl PokerRoom {
             next_ante: next_level.map(|l| l.ante),
             level_remaining_secs,
             starting_chips: self.starting_chips,
+            rebuy_mode: self.rebuy_mode,
             dealer_seat: self.dealer_seat,
             small_blind_seat: self.small_blind_seat,
             big_blind_seat: self.big_blind_seat,
@@ -2096,5 +2234,59 @@ mod tests {
         assert_eq!(summary.players.len(), 2);
         assert!(summary.players.iter().all(|p| p.hole_cards.len() == 2));
         assert!(!summary.actions_log.is_empty());
+    }
+
+    #[test]
+    fn test_freezeout_elimination_no_auto_rebuy_and_tournament_reset() {
+        let cfg = GamePreset::SngStandard.build_config(Some(10), Some(500), Some(5));
+        assert_eq!(cfg.rebuy_mode, RebuyMode::Freezeout);
+        let mut room = PokerRoom::new_with_preset("sng_freeze".into(), "Freezeout".into(), cfg);
+
+        room.add_or_reconnect_player("p1".into(), "Alice".into())
+            .unwrap();
+        room.add_or_reconnect_player("p2".into(), "Bob".into())
+            .unwrap();
+        room.add_or_reconnect_player("p3".into(), "Charlie".into())
+            .unwrap();
+
+        // Simulate p3 getting knocked out to 0 chips at the end of Hand 1
+        room.start_new_hand().unwrap();
+        room.players.iter_mut().find(|p| p.id == "p3").unwrap().chips = 0;
+        room.finish_hand_cleanup();
+
+        assert!(room.eliminated_ids.contains("p3"));
+        assert!(room.rebuy("p3").is_err());
+
+        // Even if p3 leaves and rejoins during the same tournament, p3 still has 0 chips
+        room.leave_player("p3");
+        room.add_or_reconnect_player("p3".into(), "Charlie".into())
+            .unwrap();
+        assert_eq!(
+            room.players.iter().find(|p| p.id == "p3").unwrap().chips,
+            0
+        );
+
+        // Next hand deals ONLY to p1 and p2 (p3 is NOT auto-rebought!)
+        room.start_new_hand().unwrap();
+        let p3 = room.players.iter().find(|p| p.id == "p3").unwrap();
+        assert_eq!(p3.chips, 0);
+        assert!(p3.folded);
+        assert!(p3.hole_cards.is_empty());
+        assert_eq!(p3.last_action.as_deref(), Some("💀 Выбыл"));
+
+        // Now p2 also loses all chips -> only p1 remains with chips > 0 (Tournament Champion!)
+        room.players.iter_mut().find(|p| p.id == "p2").unwrap().chips = 0;
+        room.players.iter_mut().find(|p| p.id == "p1").unwrap().chips = 1500;
+        room.stage = GameStage::Showdown;
+        room.finish_hand_cleanup();
+
+        // Auto-deal timer is paused because the tournament has finished with 1 survivor
+        assert!(room.showdown_started_at.is_none());
+        assert_eq!(room.active_eligible_count(), 1);
+
+        // When someone clicks "Новый турнир" (start_new_hand), all connected players get fresh starting stacks!
+        room.start_new_hand().unwrap();
+        assert!(room.eliminated_ids.is_empty());
+        assert!(room.players.iter().all(|p| p.chips > 0 && !p.hole_cards.is_empty()));
     }
 }

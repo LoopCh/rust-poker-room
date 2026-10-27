@@ -398,6 +398,7 @@ const roomsListEl = document.getElementById("rooms-list");
 const refreshRoomsBtn = document.getElementById("refresh-rooms-btn");
 const createRoomBtn = document.getElementById("create-room-btn");
 const presetSelect = document.getElementById("new-room-preset");
+const rebuyModeSelect = document.getElementById("new-room-rebuy-mode");
 const sbInput = document.getElementById("new-room-sb");
 const levelMinsGroup = document.getElementById("level-mins-group");
 const levelMinsInput = document.getElementById("new-room-level-mins");
@@ -653,8 +654,10 @@ presetSelect.addEventListener("change", () => {
     if (preset === "cash") {
         levelMinsGroup.classList.add("hidden");
         chipsInput.value = sb * 100;
+        if (rebuyModeSelect) rebuyModeSelect.value = "manual";
     } else {
         levelMinsGroup.classList.remove("hidden");
+        if (rebuyModeSelect) rebuyModeSelect.value = "freezeout";
         if (preset === "sng_standard") {
             levelMinsInput.value = 5;
             chipsInput.value = sb * 150;
@@ -1255,6 +1258,7 @@ createRoomBtn.addEventListener("click", async () => {
     getAndSavePlayerName();
     const roomName = document.getElementById("new-room-name").value.trim() || "Вечерний покер";
     const preset = presetSelect.value;
+    const rebuyMode = rebuyModeSelect ? rebuyModeSelect.value : undefined;
     const sb = parseInt(sbInput.value, 10) || 10;
     const levelMins = parseInt(levelMinsInput.value, 10) || 5;
     const chips = parseInt(chipsInput.value, 10) || 1500;
@@ -1266,6 +1270,7 @@ createRoomBtn.addEventListener("click", async () => {
             body: JSON.stringify({
                 room_name: roomName,
                 preset: preset,
+                rebuy_mode: rebuyMode,
                 small_blind: sb,
                 starting_chips: chips,
                 level_mins: levelMins
@@ -1682,19 +1687,28 @@ function handleRoomStateUpdate(state) {
     }
 
     const activeReadyCount = state.players.filter(p => p.connected && !p.sitting_out).length;
+    const withChipsReadyCount = state.players.filter(p => p.connected && !p.sitting_out && p.chips > 0).length;
     const offlineCount = state.players.filter(p => !p.connected).length;
     const isIdleStage = state.stage === "waiting" || state.stage === "showdown";
+    const isFreezeout = state.rebuy_mode === "freezeout";
+    const isTournamentFinished = isFreezeout && state.hand_number > 0 && withChipsReadyCount < 2 && activeReadyCount >= 2;
 
     if (isIdleStage && activeReadyCount >= 2) {
         startHandBtn.classList.remove("hidden");
-        startHandBtn.textContent = state.hand_number === 0 ? "🃏 Начать игру" : "🃏 Раздать сейчас";
+        if (state.hand_number === 0) {
+            startHandBtn.textContent = "🃏 Начать игру";
+        } else if (isTournamentFinished) {
+            startHandBtn.textContent = "🏆 Новый турнир (сбросить стеки)";
+        } else {
+            startHandBtn.textContent = "🃏 Раздать сейчас";
+        }
     } else {
         startHandBtn.classList.add("hidden");
     }
 
     showCardsBtn.classList.toggle("hidden", !state.can_show_cards);
     kickOfflineBtn.classList.toggle("hidden", !(isIdleStage && offlineCount > 0));
-    rebuyBtn.classList.toggle("hidden", !(me && isIdleStage && me.chips < state.starting_chips));
+    rebuyBtn.classList.toggle("hidden", !(me && isIdleStage && !isFreezeout && me.chips < state.starting_chips));
 
     updateCenterBannerText();
 
@@ -1801,7 +1815,11 @@ function handleRoomStateUpdate(state) {
         if (player.hole_cards.length === 0) {
             const emptyHint = document.createElement("div");
             emptyHint.className = "seat-cards-empty";
-            emptyHint.textContent = player.folded ? "Пас" : "Ожидание\nраздачи";
+            if (player.chips === 0 && isFreezeout && state.hand_number > 0) {
+                emptyHint.textContent = "💀 Выбыл\nиз турнира";
+            } else {
+                emptyHint.textContent = player.folded ? "Пас" : "Ожидание\nраздачи";
+            }
             cardsContainer.appendChild(emptyHint);
         } else {
             player.hole_cards.forEach((c, idx) => {
@@ -1966,7 +1984,11 @@ function updateCenterBannerText() {
             .map(w => `🏆 ${w.player_name} +${w.amount} (${w.hand_name})`)
             .join("  •  ");
 
-        if (clientNextHandInitialRem !== null && clientNextHandInitialRem !== undefined && !roomState.paused) {
+        const survivors = roomState.players.filter(p => p.connected && !p.sitting_out && p.chips > 0);
+        const hasEliminated = roomState.players.some(p => p.chips === 0);
+        if (roomState.rebuy_mode === "freezeout" && survivors.length === 1 && hasEliminated) {
+            tableStatusBanner.textContent = `🏆🎉 ЧЕМПИОН ТУРНИРА: ${survivors[0].name} (${survivors[0].chips} 🪙)! Нажмите «🏆 Новый турнир» для новой партии.`;
+        } else if (clientNextHandInitialRem !== null && clientNextHandInitialRem !== undefined && !roomState.paused) {
             const rem = Math.max(0, Math.ceil(clientNextHandInitialRem - elapsedSec));
             tableStatusBanner.textContent = `${winText}   |   ⏳ Следующая раздача через ${rem}с...`;
         } else if (roomState.paused) {
