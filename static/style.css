@@ -14,6 +14,7 @@
     --accent-green: #10b981;
     --accent-red: #ef4444;
     --card-white: #ffffff;
+    --ui-seat-scale: 1;
 }
 
 body[data-theme="royal"] {
@@ -512,17 +513,19 @@ input[type="number"]:focus,
 
 .community-cards {
     display: flex;
-    gap: 9px;
-    min-height: 80px;
+    gap: 10px;
+    min-height: 92px;
     align-items: center;
     justify-content: center;
     perspective: 700px;
+    transform: scale(var(--ui-seat-scale, 1));
+    transition: transform 0.2s ease;
 }
 
 .card-slot {
-    width: 56px;
-    height: 78px;
-    border-radius: 8px;
+    width: 64px;
+    height: 90px;
+    border-radius: 9px;
     border: 1.5px dashed rgba(255, 255, 255, 0.16);
     background: rgba(0, 0, 0, 0.16);
 }
@@ -544,15 +547,15 @@ input[type="number"]:focus,
 }
 
 .playing-card {
-    width: 56px;
-    height: 78px;
+    width: 64px;
+    height: 90px;
     background: linear-gradient(165deg, #ffffff 0%, #f1f5f9 100%);
-    border-radius: 8px;
+    border-radius: 9px;
     box-shadow: 0 5px 12px rgba(0, 0, 0, 0.5);
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    padding: 5px 6px;
+    padding: 5px 7px;
     font-weight: 800;
     position: relative;
     border: 1px solid rgba(0, 0, 0, 0.12);
@@ -564,10 +567,10 @@ input[type="number"]:focus,
 }
 
 .playing-card.card-sm {
-    width: 41px;
-    height: 58px;
-    padding: 3px 4px;
-    border-radius: 6px;
+    width: 50px;
+    height: 70px;
+    padding: 4px 5px;
+    border-radius: 7px;
 }
 
 /* Подсветка 5 лучших карт победителя на вскрытии */
@@ -583,7 +586,7 @@ input[type="number"]:focus,
     filter: grayscale(25%);
 }
 
-/* Цвета мастей (2-цветная классика) */
+/* Классические цвета 4 мастей (♥♦ красные, ♠♣ чёрные) */
 .playing-card.suit-hearts,
 .playing-card.suit-diamonds {
     color: #dc2626;
@@ -594,33 +597,24 @@ input[type="number"]:focus,
     color: #0f172a;
 }
 
-/* 4-цветная профессиональная колода */
-body.four-color-deck .playing-card.suit-diamonds {
-    color: #1d4ed8;
-}
-
-body.four-color-deck .playing-card.suit-clubs {
-    color: #15803d;
-}
-
 .playing-card .card-top {
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1;
     letter-spacing: -0.5px;
 }
 
 .playing-card.card-sm .card-top {
-    font-size: 12px;
+    font-size: 14px;
 }
 
 .playing-card .card-center-suit {
-    font-size: 24px;
+    font-size: 28px;
     align-self: center;
     line-height: 1;
 }
 
 .playing-card.card-sm .card-center-suit {
-    font-size: 19px;
+    font-size: 22px;
 }
 
 .playing-card.card-back {
@@ -656,32 +650,42 @@ body.four-color-deck .playing-card.suit-clubs {
 
 .seat {
     position: absolute;
-    width: 236px;
+    width: 268px;
     pointer-events: auto;
     display: flex;
     flex-direction: column;
     align-items: center;
-    transform: translate(-50%, -50%);
+    transform: translate(-50%, -50%) scale(var(--ui-seat-scale, 1));
+    transition: transform 0.2s ease;
     z-index: 5;
 }
 
-.seat-pos-0 { top: 94%; left: 50%; }
-.seat-pos-1 { top: 75%; left: 9%; }
-.seat-pos-2 { top: 25%; left: 9%; }
-.seat-pos-3 { top: 6%;  left: 50%; }
-.seat-pos-4 { top: 25%; left: 91%; }
-.seat-pos-5 { top: 75%; left: 91%; }
+.seat.cam-expanded {
+    z-index: 25;
+}
+
+.seat-pos-0 { top: 92%; left: 50%; }
+.seat-pos-1 { top: 75%; left: 10%; }
+.seat-pos-2 { top: 25%; left: 10%; }
+.seat-pos-3 { top: 8%;  left: 50%; }
+.seat-pos-4 { top: 25%; left: 90%; }
+.seat-pos-5 { top: 75%; left: 90%; }
 
 .seat-box {
-    width: 230px;
-    background: rgba(13, 19, 33, 0.95);
+    width: 264px;
+    background: rgba(13, 19, 33, 0.96);
     border: 2px solid var(--border-color);
     border-radius: 14px;
-    padding: 8px 9px 10px;
-    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.68);
+    padding: 9px 10px 11px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.72);
     position: relative;
     overflow: visible;
     transition: all 0.22s ease;
+}
+
+.seat.cam-expanded .seat-box {
+    width: 356px;
+    border-color: var(--accent-blue);
 }
 
 @keyframes pulseActiveTurn {
@@ -734,22 +738,52 @@ body.four-color-deck .playing-card.suit-clubs {
 .seat-main-row {
     display: flex;
     align-items: stretch;
-    gap: 7px;
-    margin-bottom: 6px;
+    gap: 8px;
+    margin-bottom: 7px;
 }
 
 .seat-media-wrap {
-    width: 112px;
-    height: 84px;
+    width: 134px;
+    height: 100px;
     flex-shrink: 0;
     background: #070a12;
-    border-radius: 9px;
+    border-radius: 10px;
     overflow: hidden;
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    cursor: pointer;
+    transition: width 0.22s ease, height 0.22s ease, border-color 0.18s ease;
+}
+
+.seat-media-wrap:hover {
+    border-color: rgba(96, 165, 250, 0.65);
+}
+
+.seat.cam-expanded .seat-media-wrap {
+    width: 222px;
+    height: 166px;
+}
+
+.seat-zoom-hint {
+    position: absolute;
+    bottom: 4px;
+    right: 5px;
+    background: rgba(7, 11, 18, 0.72);
+    color: rgba(248, 250, 252, 0.85);
+    font-size: 11px;
+    line-height: 1;
+    padding: 3px 5px;
+    border-radius: 5px;
+    pointer-events: none;
+    opacity: 0.65;
+    transition: opacity 0.15s ease;
+}
+
+.seat-media-wrap:hover .seat-zoom-hint {
+    opacity: 1;
 }
 
 .seat-video {
@@ -770,10 +804,10 @@ body.four-color-deck .playing-card.suit-clubs {
     align-items: center;
     justify-content: center;
     color: #e2e8f0;
-    font-size: 20px;
+    font-size: 22px;
     font-weight: 800;
-    width: 42px;
-    height: 42px;
+    width: 48px;
+    height: 48px;
     border-radius: 50%;
     background: linear-gradient(135deg, #1e293b, #0f172a);
     border: 1.5px solid var(--border-color);
@@ -781,10 +815,10 @@ body.four-color-deck .playing-card.suit-clubs {
 
 .seat-cards-panel {
     flex: 1;
-    min-height: 84px;
+    min-height: 100px;
     background: rgba(7, 10, 18, 0.62);
     border: 1px dashed rgba(255, 255, 255, 0.12);
-    border-radius: 9px;
+    border-radius: 10px;
     display: flex;
     flex-direction: column;
     align-items: center;

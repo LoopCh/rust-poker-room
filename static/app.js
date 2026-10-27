@@ -4,7 +4,7 @@
 const STORAGE_KEY_ID = "rustholdem_player_id";
 const STORAGE_KEY_NAME = "rustholdem_player_name";
 const STORAGE_KEY_THEME = "rustholdem_theme";
-const STORAGE_KEY_4COLOR = "rustholdem_4color";
+const STORAGE_KEY_SCALE = "rustholdem_ui_scale";
 const STORAGE_KEY_SOUND = "rustholdem_sound";
 
 let myPlayerId = localStorage.getItem(STORAGE_KEY_ID);
@@ -160,7 +160,7 @@ const kickOfflineBtn = document.getElementById("kick-offline-btn");
 const sitOutBtn = document.getElementById("sit-out-btn");
 const pauseGameBtn = document.getElementById("pause-game-btn");
 const themeSelect = document.getElementById("theme-select");
-const deckColorBtn = document.getElementById("deck-color-btn");
+const uiScaleSelect = document.getElementById("ui-scale-select");
 const toggleSoundBtn = document.getElementById("toggle-sound-btn");
 const toggleCamBtn = document.getElementById("toggle-cam-btn");
 const toggleMicBtn = document.getElementById("toggle-mic-btn");
@@ -365,10 +365,11 @@ window.addEventListener("DOMContentLoaded", () => {
     document.body.dataset.theme = savedTheme;
     themeSelect.value = savedTheme;
 
-    const isFourColor = localStorage.getItem(STORAGE_KEY_4COLOR) === "1";
-    document.body.classList.toggle("four-color-deck", isFourColor);
-    deckColorBtn.textContent = isFourColor ? "🃏 Масти: 4 цвета" : "🃏 Масти: 2 цвета";
-    deckColorBtn.classList.toggle("active", isFourColor);
+    const savedScale = localStorage.getItem(STORAGE_KEY_SCALE) || "1";
+    document.documentElement.style.setProperty("--ui-seat-scale", savedScale);
+    if (uiScaleSelect) {
+        uiScaleSelect.value = savedScale;
+    }
 
     toggleSoundBtn.textContent = soundEnabled ? "🔊 Звук" : "🔇 Без звука";
     toggleSoundBtn.classList.toggle("active", soundEnabled);
@@ -416,13 +417,13 @@ themeSelect.addEventListener("change", () => {
     localStorage.setItem(STORAGE_KEY_THEME, theme);
 });
 
-deckColorBtn.addEventListener("click", () => {
-    const enabled = !document.body.classList.contains("four-color-deck");
-    document.body.classList.toggle("four-color-deck", enabled);
-    localStorage.setItem(STORAGE_KEY_4COLOR, enabled ? "1" : "0");
-    deckColorBtn.textContent = enabled ? "🃏 Масти: 4 цвета" : "🃏 Масти: 2 цвета";
-    deckColorBtn.classList.toggle("active", enabled);
-});
+if (uiScaleSelect) {
+    uiScaleSelect.addEventListener("change", () => {
+        const scale = uiScaleSelect.value || "1";
+        document.documentElement.style.setProperty("--ui-seat-scale", scale);
+        localStorage.setItem(STORAGE_KEY_SCALE, scale);
+    });
+}
 
 toggleSoundBtn.addEventListener("click", () => {
     soundEnabled = !soundEnabled;
@@ -637,9 +638,10 @@ function initSeatDOM() {
                 </div>
                 <div class="seat-emoji-layer" id="seat-emoji-${pos}"></div>
                 <div class="seat-main-row">
-                    <div class="seat-media-wrap">
+                    <div class="seat-media-wrap" id="seat-media-wrap-${pos}" title="Нажмите, чтобы увеличить или уменьшить камеру этого игрока">
                         <video class="seat-video" id="seat-video-${pos}" autoplay playsinline></video>
                         <div class="seat-avatar-placeholder" id="seat-avatar-${pos}">?</div>
+                        <div class="seat-zoom-hint">⛶</div>
                     </div>
                     <div class="seat-cards-panel">
                         <div class="seat-hole-cards" id="seat-cards-${pos}"></div>
@@ -657,6 +659,12 @@ function initSeatDOM() {
             <div class="seat-bet-bubble hidden" id="seat-bet-${pos}">0</div>
         `;
         seatsContainer.appendChild(seatEl);
+        const mediaWrapEl = document.getElementById(`seat-media-wrap-${pos}`);
+        if (mediaWrapEl) {
+            mediaWrapEl.addEventListener("click", () => {
+                seatEl.classList.toggle("cam-expanded");
+            });
+        }
     }
 }
 
