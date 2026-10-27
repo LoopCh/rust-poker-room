@@ -6,6 +6,7 @@ const STORAGE_KEY_NAME = "rustholdem_player_name";
 const STORAGE_KEY_THEME = "rustholdem_theme";
 const STORAGE_KEY_SCALE = "rustholdem_ui_scale";
 const STORAGE_KEY_SOUND = "rustholdem_sound";
+const STORAGE_KEY_CHAT_HIDDEN = "rustholdem_chat_hidden";
 
 let myPlayerId = localStorage.getItem(STORAGE_KEY_ID);
 if (!myPlayerId) {
@@ -26,6 +27,11 @@ let prevCommunityCount = 0;
 let prevPot = 0;
 let prevTurnSeat = null;
 let prevStage = "waiting";
+let prevMyHandName = null;
+let prevAllInCount = 0;
+const prevPlayerChips = new Map();
+let unreadChatCount = 0;
+let spotlightTimer = null;
 let clientStateReceivedAt = 0;
 let clientTurnInitialRem = 45;
 let clientNextHandInitialRem = null;
@@ -120,22 +126,196 @@ const SoundFX = {
             osc.stop(now + idx * 0.11 + 0.25);
         });
     },
-    playWin() {
+    playChatNotify() {
         const ctx = getAudioCtx();
         if (!ctx) return;
         const now = ctx.currentTime;
-        [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
+        [587.33, 880].forEach((freq, idx) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(freq, now + idx * 0.065);
+            gain.gain.setValueAtTime(0.08, now + idx * 0.065);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.065 + 0.14);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now + idx * 0.065);
+            osc.stop(now + idx * 0.065 + 0.15);
+        });
+    },
+    playAllIn() {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(160, now);
+        osc.frequency.exponentialRampToValueAtTime(580, now + 0.38);
+        gain.gain.setValueAtTime(0.09, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.44);
+    },
+    playComboUpgrade() {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        [659.25, 880, 1174.66].forEach((freq, i) => {
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
             osc.type = "triangle";
-            osc.frequency.setValueAtTime(freq, now + idx * 0.08);
-            gain.gain.setValueAtTime(0.12, now + idx * 0.08);
-            gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.35);
+            osc.frequency.setValueAtTime(freq, now + i * 0.055);
+            gain.gain.setValueAtTime(0.08, now + i * 0.055);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.055 + 0.22);
             osc.connect(gain);
             gain.connect(ctx.destination);
-            osc.start(now + idx * 0.08);
-            osc.stop(now + idx * 0.08 + 0.36);
+            osc.start(now + i * 0.055);
+            osc.stop(now + i * 0.055 + 0.23);
         });
+    },
+    playKnockout() {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        const now = ctx.currentTime;
+
+        // 1. Мощный суб-басовый удар (Bass Drop)
+        const sub = ctx.createOscillator();
+        const subGain = ctx.createGain();
+        sub.type = "sawtooth";
+        sub.frequency.setValueAtTime(170, now);
+        sub.frequency.exponentialRampToValueAtTime(32, now + 0.65);
+        subGain.gain.setValueAtTime(0.24, now);
+        subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.68);
+        sub.connect(subGain);
+        subGain.connect(ctx.destination);
+        sub.start(now);
+        sub.stop(now + 0.7);
+
+        // 2. Драматичный низкий гонг нокаута
+        [220, 277.18, 329.63].forEach((freq) => {
+            const osc = ctx.createOscillator();
+            const g = ctx.createGain();
+            osc.type = "triangle";
+            osc.frequency.setValueAtTime(freq, now + 0.06);
+            osc.frequency.exponentialRampToValueAtTime(freq * 0.88, now + 0.75);
+            g.gain.setValueAtTime(0.11, now + 0.06);
+            g.gain.exponentialRampToValueAtTime(0.001, now + 0.78);
+            osc.connect(g);
+            g.connect(ctx.destination);
+            osc.start(now + 0.06);
+            osc.stop(now + 0.8);
+        });
+    },
+    playComboWin(handName) {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        const h = handName || "";
+
+        if (h === "Каре" || h === "Стрит-флеш" || h === "Роял-флеш") {
+            // Эпичная джекпот-фанфара для монстр-комбинаций!
+            const notes = [523.25, 659.25, 783.99, 1046.5, 1318.51, 1567.98, 2093.0];
+            notes.forEach((freq, idx) => {
+                ["triangle", "sawtooth"].forEach((wave, wIdx) => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = wave;
+                    osc.frequency.setValueAtTime(freq * (wIdx === 1 ? 0.5 : 1), now + idx * 0.075);
+                    gain.gain.setValueAtTime(wIdx === 1 ? 0.07 : 0.14, now + idx * 0.075);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.075 + 0.55);
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start(now + idx * 0.075);
+                    osc.stop(now + idx * 0.075 + 0.56);
+                });
+            });
+        } else if (h === "Фулл-хаус") {
+            // Торжественный медный аккорд Фулл-хауса
+            const seq = [
+                { f: 392.0, t: 0 },
+                { f: 523.25, t: 0.09 },
+                { f: 659.25, t: 0.18 },
+                { f: 783.99, t: 0.27 },
+                { f: 1046.5, t: 0.38 }
+            ];
+            seq.forEach(({ f, t }) => {
+                const osc1 = ctx.createOscillator();
+                const osc2 = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc1.type = "triangle";
+                osc2.type = "sawtooth";
+                osc1.frequency.setValueAtTime(f, now + t);
+                osc2.frequency.setValueAtTime(f * 0.5, now + t);
+                gain.gain.setValueAtTime(0.13, now + t);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + t + 0.45);
+                osc1.connect(gain);
+                osc2.connect(gain);
+                gain.connect(ctx.destination);
+                osc1.start(now + t);
+                osc2.start(now + t);
+                osc1.stop(now + t + 0.46);
+                osc2.stop(now + t + 0.46);
+            });
+        } else if (h === "Флеш") {
+            // Переливающийся кристальный каскад для Флеша
+            [587.33, 739.99, 880, 1174.66, 1479.98].forEach((freq, idx) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(freq, now + idx * 0.06);
+                gain.gain.setValueAtTime(0.13, now + idx * 0.06);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.06 + 0.42);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(now + idx * 0.06);
+                osc.stop(now + idx * 0.06 + 0.43);
+            });
+        } else if (h === "Стрит") {
+            // Восходящая ступенчатая гамма из 5 нот для Стрита
+            [523.25, 587.33, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = "triangle";
+                osc.frequency.setValueAtTime(freq, now + idx * 0.065);
+                gain.gain.setValueAtTime(0.13, now + idx * 0.065);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.065 + 0.32);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(now + idx * 0.065);
+                osc.stop(now + idx * 0.065 + 0.33);
+            });
+        } else if (h === "Сет (Тройка)") {
+            // Бодрый тройной импульс для Сета
+            [659.25, 783.99, 987.77, 1318.51].forEach((freq, idx) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = "triangle";
+                osc.frequency.setValueAtTime(freq, now + idx * 0.075);
+                gain.gain.setValueAtTime(0.13, now + idx * 0.075);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.075 + 0.34);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(now + idx * 0.075);
+                osc.stop(now + idx * 0.075 + 0.35);
+            });
+        } else {
+            // Классический мягкий победный аккорд (Старшая карта, Пара, Две пары)
+            [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = "triangle";
+                osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+                gain.gain.setValueAtTime(0.12, now + idx * 0.08);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.35);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(now + idx * 0.08);
+                osc.stop(now + idx * 0.08 + 0.36);
+            });
+        }
     }
 };
 
@@ -165,6 +345,13 @@ const toggleSoundBtn = document.getElementById("toggle-sound-btn");
 const toggleCamBtn = document.getElementById("toggle-cam-btn");
 const toggleMicBtn = document.getElementById("toggle-mic-btn");
 const openDiagBtn = document.getElementById("open-diag-btn");
+const toggleChatBtn = document.getElementById("toggle-chat-btn");
+const chatUnreadBadge = document.getElementById("chat-unread-badge");
+const closeSidebarBtn = document.getElementById("close-sidebar-btn");
+const tableArenaEl = document.getElementById("table-arena");
+const chatMiniPopupsEl = document.getElementById("chat-mini-popups");
+const fxParticlesLayer = document.getElementById("fx-particles-layer");
+const comboSpotlightBanner = document.getElementById("combo-spotlight-banner");
 const rebuyBtn = document.getElementById("rebuy-btn");
 const startHandBtn = document.getElementById("start-hand-btn");
 const showCardsBtn = document.getElementById("show-cards-btn");
@@ -371,6 +558,9 @@ window.addEventListener("DOMContentLoaded", () => {
         uiScaleSelect.value = savedScale;
     }
 
+    const savedChatHidden = localStorage.getItem(STORAGE_KEY_CHAT_HIDDEN) === "1";
+    setChatCollapsed(savedChatHidden);
+
     toggleSoundBtn.textContent = soundEnabled ? "🔊 Звук" : "🔇 Без звука";
     toggleSoundBtn.classList.toggle("active", soundEnabled);
 
@@ -422,6 +612,40 @@ if (uiScaleSelect) {
         const scale = uiScaleSelect.value || "1";
         document.documentElement.style.setProperty("--ui-seat-scale", scale);
         localStorage.setItem(STORAGE_KEY_SCALE, scale);
+    });
+}
+
+function setChatCollapsed(collapsed) {
+    if (!tableArenaEl || !toggleChatBtn) return;
+    tableArenaEl.classList.toggle("chat-collapsed", collapsed);
+    toggleChatBtn.classList.toggle("active", !collapsed);
+    localStorage.setItem(STORAGE_KEY_CHAT_HIDDEN, collapsed ? "1" : "0");
+
+    if (!collapsed) {
+        unreadChatCount = 0;
+        if (chatUnreadBadge) {
+            chatUnreadBadge.textContent = "0";
+            chatUnreadBadge.classList.add("hidden");
+        }
+        if (chatMiniPopupsEl) {
+            chatMiniPopupsEl.innerHTML = "";
+        }
+        if (chatMessagesEl) {
+            chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+        }
+    }
+}
+
+if (toggleChatBtn) {
+    toggleChatBtn.addEventListener("click", () => {
+        const isCollapsed = tableArenaEl.classList.contains("chat-collapsed");
+        setChatCollapsed(!isCollapsed);
+    });
+}
+
+if (closeSidebarBtn) {
+    closeSidebarBtn.addEventListener("click", () => {
+        setChatCollapsed(true);
     });
 }
 
@@ -678,6 +902,78 @@ function formatMmSs(totalSec) {
     return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+const COMBO_POWER_RANK = {
+    "Старшая карта": 1,
+    "Пара": 2,
+    "Две пары": 3,
+    "Сет (Тройка)": 4,
+    "Стрит": 5,
+    "Флеш": 6,
+    "Фулл-хаус": 7,
+    "Каре": 8,
+    "Стрит-флеш": 9,
+    "Роял-флеш": 10
+};
+
+function showComboSpotlight(text, styleType = "") {
+    if (!comboSpotlightBanner) return;
+    if (spotlightTimer) clearTimeout(spotlightTimer);
+    comboSpotlightBanner.className = "combo-spotlight-banner" + (styleType ? ` ${styleType}` : "");
+    comboSpotlightBanner.textContent = text;
+    void comboSpotlightBanner.offsetWidth;
+    spotlightTimer = setTimeout(() => {
+        comboSpotlightBanner.classList.add("hidden");
+    }, 3600);
+}
+
+function spawnParticlesAt(xPct, yPct, count, kindClass) {
+    if (!fxParticlesLayer) return;
+    for (let i = 0; i < count; i++) {
+        const p = document.createElement("div");
+        p.className = `fx-particle ${kindClass}`;
+        p.style.left = `${xPct}%`;
+        p.style.top = `${yPct}%`;
+        const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.4;
+        const dist = 55 + Math.random() * 115;
+        const dx = Math.cos(angle) * dist;
+        const dy = Math.sin(angle) * dist;
+        const rot = Math.round((Math.random() - 0.5) * 520);
+        p.style.setProperty("--dx", `${dx}px`);
+        p.style.setProperty("--dy", `${dy}px`);
+        p.style.setProperty("--rot", `${rot}deg`);
+        fxParticlesLayer.appendChild(p);
+        setTimeout(() => p.remove(), 1700);
+    }
+}
+
+function triggerSeatKnockout(pos, playerName) {
+    const seatEl = document.getElementById(`seat-slot-${pos}`);
+    if (!seatEl) return;
+
+    seatEl.classList.remove("knockout-anim");
+    void seatEl.offsetWidth;
+    seatEl.classList.add("knockout-anim");
+    setTimeout(() => seatEl.classList.remove("knockout-anim"), 1400);
+
+    const stamp = document.createElement("div");
+    stamp.className = "knockout-stamp";
+    stamp.textContent = "💥 ВЫБИТ!";
+    seatEl.appendChild(stamp);
+    setTimeout(() => stamp.remove(), 2650);
+
+    const seatCoords = [
+        [50, 92],
+        [10, 75],
+        [10, 25],
+        [50, 8],
+        [90, 25],
+        [90, 75]
+    ];
+    const [sx, sy] = seatCoords[pos] || [50, 50];
+    spawnParticlesAt(sx, sy, 18, "spark");
+    showToast(`💥 НОКАУТ! Игрок ${playerName} потерял весь стек!`);
+}
+
 function handleRoomStateUpdate(state) {
     const isNewHand = state.hand_number !== prevHandNumber && state.hand_number > 0;
     const isNewCards = state.community_cards.length > prevCommunityCount || isNewHand;
@@ -695,8 +991,62 @@ function handleRoomStateUpdate(state) {
         !me.folded &&
         !me.all_in;
 
+    const currentAllInCount = state.players.filter(p => p.all_in).length;
+    const someoneJustWentAllIn =
+        !isNewHand &&
+        state.stage !== "waiting" &&
+        state.stage !== "showdown" &&
+        currentAllInCount > prevAllInCount;
+
+    if (isNewHand || state.stage === "waiting") {
+        for (const p of state.players) {
+            if (p.chips > 0 || p.bet_in_round > 0) {
+                prevPlayerChips.set(p.id, p.chips + p.bet_in_round);
+            }
+        }
+    }
+
     if (isShowdownTransition && state.winners.length > 0) {
-        SoundFX.playWin();
+        let bestComboName = "";
+        let bestRank = 0;
+        for (const w of state.winners) {
+            const r = COMBO_POWER_RANK[w.hand_name] || 1;
+            if (r > bestRank) {
+                bestRank = r;
+                bestComboName = w.hand_name;
+            }
+        }
+
+        // Проверяем, выбили ли кого-то в этой раздаче (НОКАУТ)
+        const knockedOutNames = [];
+        for (const p of state.players) {
+            const hadChips = prevPlayerChips.get(p.id) || 0;
+            if (hadChips > 0 && p.chips === 0) {
+                knockedOutNames.push(p.name);
+                const pos = (p.seat - mySeatOffset + 6) % 6;
+                triggerSeatKnockout(pos, p.name);
+            }
+            prevPlayerChips.set(p.id, p.chips);
+        }
+
+        if (knockedOutNames.length > 0) {
+            SoundFX.playKnockout();
+            setTimeout(() => SoundFX.playComboWin(bestComboName), 280);
+            showComboSpotlight(`💥 НОКАУТ: ${knockedOutNames.join(", ")}!`, "knockout");
+        } else {
+            SoundFX.playComboWin(bestComboName);
+            if (bestRank >= 8) {
+                showComboSpotlight(`👑 МОНСТР-КОМБИНАЦИЯ: ${bestComboName}!`, "monster");
+                spawnParticlesAt(50, 48, 28, "gold");
+            } else if (bestRank >= 4) {
+                showComboSpotlight(`🔥 ${bestComboName}! (${state.winners[0].player_name})`);
+                if (bestRank >= 6) {
+                    spawnParticlesAt(50, 48, 18, "gold");
+                }
+            }
+        }
+    } else if (someoneJustWentAllIn) {
+        SoundFX.playAllIn();
     } else if (isNewCards) {
         SoundFX.playCard();
     } else if (isPotIncreased) {
@@ -915,8 +1265,27 @@ function handleRoomStateUpdate(state) {
     if (me) {
         const bbCount = state.big_blind > 0 ? Math.round(me.chips / state.big_blind) : 0;
         myStackBbLabel.textContent = `Ваша комбинация • Стек: ${bbCount} BB`;
-        myHandRankEl.textContent =
+        const newHandName =
             me.hand_name || (me.hole_cards.length === 2 && !me.folded ? "Карманные карты" : "—");
+        myHandRankEl.textContent = newHandName;
+
+        // Звуковая и визуальная подсветка, когда ваша собственная комбинация усилилась на флопе/тёрне/ривере
+        const oldRank = COMBO_POWER_RANK[prevMyHandName] || 0;
+        const curRank = COMBO_POWER_RANK[me.hand_name] || 0;
+        if (
+            !isShowdownTransition &&
+            state.stage !== "waiting" &&
+            curRank > oldRank &&
+            curRank >= 3
+        ) {
+            SoundFX.playComboUpgrade();
+            myHandRankEl.classList.remove("combo-upgrade-pulse");
+            void myHandRankEl.offsetWidth;
+            myHandRankEl.classList.add("combo-upgrade-pulse");
+            setTimeout(() => myHandRankEl.classList.remove("combo-upgrade-pulse"), 900);
+        }
+        prevMyHandName = me.hand_name || null;
+
         updateActionControls(state, me);
     }
 
@@ -933,6 +1302,7 @@ function handleRoomStateUpdate(state) {
     prevPot = state.pot;
     prevTurnSeat = state.current_turn_seat;
     prevStage = state.stage;
+    prevAllInCount = currentAllInCount;
 
     syncWebrtcPeers(state.players);
 }
@@ -1229,6 +1599,35 @@ function appendChatMessage(author, text) {
     div.innerHTML = `<span class="author">${escapeHtml(author)}:</span>${escapeHtml(text)}`;
     chatMessagesEl.appendChild(div);
     chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+
+    // Если боковая панель чата скрыта — показываем счетчик и компактное всплывающее уведомление
+    if (tableArenaEl && tableArenaEl.classList.contains("chat-collapsed")) {
+        unreadChatCount++;
+        if (chatUnreadBadge) {
+            chatUnreadBadge.textContent = unreadChatCount > 99 ? "99+" : String(unreadChatCount);
+            chatUnreadBadge.classList.remove("hidden");
+        }
+        SoundFX.playChatNotify();
+
+        if (chatMiniPopupsEl) {
+            const popup = document.createElement("div");
+            popup.className = "chat-mini-popup";
+            popup.innerHTML = `
+                <div><span class="popup-author">💬 ${escapeHtml(author)}:</span>${escapeHtml(text)}</div>
+                <span class="popup-hint">Нажмите, чтобы открыть чат</span>
+            `;
+            popup.addEventListener("click", () => {
+                setChatCollapsed(false);
+            });
+            chatMiniPopupsEl.appendChild(popup);
+            while (chatMiniPopupsEl.children.length > 3) {
+                chatMiniPopupsEl.firstElementChild.remove();
+            }
+            setTimeout(() => {
+                if (popup.parentNode) popup.remove();
+            }, 4800);
+        }
+    }
 }
 
 function escapeHtml(str) {

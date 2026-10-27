@@ -426,9 +426,18 @@ input[type="number"]:focus,
 .table-arena {
     flex: 1;
     display: grid;
-    grid-template-columns: 1fr 295px;
+    grid-template-columns: 1fr 305px;
     min-height: 0;
     overflow: hidden;
+    transition: grid-template-columns 0.25s ease;
+}
+
+.table-arena.chat-collapsed {
+    grid-template-columns: 1fr;
+}
+
+.table-arena.chat-collapsed .sidebar {
+    display: none;
 }
 
 .poker-table {
@@ -443,28 +452,127 @@ input[type="number"]:focus,
 .table-felt {
     position: relative;
     width: 100%;
-    max-width: 960px;
+    max-width: 970px;
     height: 100%;
-    max-height: 520px;
+    max-height: 525px;
     background: radial-gradient(ellipse at center, var(--felt-light) 0%, var(--felt-dark) 100%);
-    border-radius: 260px;
+    border-radius: 270px;
     border: 18px solid var(--rail-wood);
     box-shadow:
-        inset 0 0 65px rgba(0, 0, 0, 0.78),
+        inset 0 0 75px rgba(0, 0, 0, 0.82),
         0 0 0 3px var(--rail-border),
-        0 25px 70px rgba(0, 0, 0, 0.9);
+        0 28px 80px rgba(0, 0, 0, 0.92),
+        0 0 95px rgba(16, 185, 129, 0.14);
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.35s ease, border-color 0.35s ease;
+    transition: max-width 0.3s ease, max-height 0.3s ease, background 0.35s ease, border-color 0.35s ease;
+}
+
+.table-arena.chat-collapsed .table-felt {
+    max-width: 1120px;
+    max-height: 575px;
 }
 
 .felt-inner-ring {
     position: absolute;
     inset: 22px;
-    border-radius: 230px;
-    border: 1.5px solid rgba(255, 255, 255, 0.09);
+    border-radius: 235px;
+    border: 1.5px solid rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 0 30px rgba(255, 255, 255, 0.03);
     pointer-events: none;
+}
+
+/* Слой частиц (искры нокаута и золотое конфетти) */
+.fx-particles-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 30;
+    overflow: visible;
+}
+
+@keyframes fxParticleBurst {
+    0% {
+        opacity: 1;
+        transform: translate(0, 0) scale(1) rotate(0deg);
+    }
+    100% {
+        opacity: 0;
+        transform: translate(var(--dx), var(--dy)) scale(0.25) rotate(var(--rot));
+    }
+}
+
+.fx-particle {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    pointer-events: none;
+    animation: fxParticleBurst 1.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.fx-particle.spark {
+    background: radial-gradient(circle, #fef08a 0%, #ef4444 70%);
+    box-shadow: 0 0 12px #ef4444, 0 0 22px #f59e0b;
+}
+
+.fx-particle.gold {
+    width: 9px;
+    height: 14px;
+    border-radius: 2px;
+    background: linear-gradient(135deg, #fef08a, #f59e0b, #d97706);
+    box-shadow: 0 0 10px rgba(251, 191, 36, 0.85);
+    animation-duration: 1.65s;
+}
+
+/* Яркий баннер комбинации / нокаута в центре стола */
+@keyframes spotlightPop {
+    0% {
+        opacity: 0;
+        transform: translateY(14px) scale(0.65);
+    }
+    18% {
+        opacity: 1;
+        transform: translateY(-4px) scale(1.08);
+    }
+    82% {
+        opacity: 1;
+        transform: translateY(-4px) scale(1);
+    }
+    100% {
+        opacity: 0;
+        transform: translateY(-18px) scale(0.92);
+    }
+}
+
+.combo-spotlight-banner {
+    padding: 6px 20px;
+    border-radius: 999px;
+    font-size: 14.5px;
+    font-weight: 900;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: #fff;
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.95), rgba(217, 119, 6, 0.95));
+    border: 1.5px solid #fef08a;
+    box-shadow: 0 0 28px rgba(245, 158, 11, 0.75), 0 8px 20px rgba(0, 0, 0, 0.65);
+    animation: spotlightPop 3.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    z-index: 15;
+    pointer-events: none;
+}
+
+.combo-spotlight-banner.monster {
+    background: linear-gradient(135deg, #ec4899, #8b5cf6, #3b82f6);
+    border-color: #f9a8d4;
+    box-shadow: 0 0 36px rgba(236, 72, 153, 0.85), 0 10px 25px rgba(0, 0, 0, 0.75);
+    font-size: 16px;
+}
+
+.combo-spotlight-banner.knockout {
+    background: linear-gradient(135deg, #ef4444, #991b1b);
+    border-color: #fca5a5;
+    box-shadow: 0 0 34px rgba(239, 68, 68, 0.9), 0 10px 25px rgba(0, 0, 0, 0.75);
 }
 
 .table-center {
@@ -673,11 +781,14 @@ input[type="number"]:focus,
 
 .seat-box {
     width: 264px;
-    background: rgba(13, 19, 33, 0.96);
-    border: 2px solid var(--border-color);
-    border-radius: 14px;
+    background: linear-gradient(160deg, rgba(19, 28, 49, 0.96) 0%, rgba(10, 15, 28, 0.96) 100%);
+    backdrop-filter: blur(12px);
+    border: 2px solid rgba(71, 85, 105, 0.55);
+    border-radius: 16px;
     padding: 9px 10px 11px;
-    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.72);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.12),
+        0 14px 32px rgba(0, 0, 0, 0.75);
     position: relative;
     overflow: visible;
     transition: all 0.22s ease;
@@ -690,10 +801,10 @@ input[type="number"]:focus,
 
 @keyframes pulseActiveTurn {
     0%, 100% {
-        box-shadow: 0 0 16px rgba(245, 158, 11, 0.65), 0 8px 20px rgba(0, 0, 0, 0.6);
+        box-shadow: 0 0 18px rgba(245, 158, 11, 0.65), 0 10px 24px rgba(0, 0, 0, 0.65);
     }
     50% {
-        box-shadow: 0 0 28px rgba(251, 191, 36, 0.95), 0 8px 20px rgba(0, 0, 0, 0.6);
+        box-shadow: 0 0 32px rgba(251, 191, 36, 0.95), 0 10px 24px rgba(0, 0, 0, 0.65);
     }
 }
 
@@ -704,11 +815,84 @@ input[type="number"]:focus,
 
 .seat.winner .seat-box {
     border-color: var(--accent-green);
-    box-shadow: 0 0 26px rgba(16, 185, 129, 0.85);
+    box-shadow: 0 0 30px rgba(16, 185, 129, 0.9);
 }
 
 .seat.folded .seat-box {
     opacity: 0.52;
+}
+
+/* Анимация выбивания игрока (НОКАУТ / BUSTED) */
+@keyframes seatKnockoutShake {
+    0% {
+        transform: translate(0, 0) rotate(0deg) scale(1);
+        border-color: #ef4444;
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.9), 0 0 35px #ef4444;
+    }
+    15% {
+        transform: translate(-11px, -4px) rotate(-4deg) scale(1.05);
+    }
+    30% {
+        transform: translate(11px, 5px) rotate(4deg) scale(1.03);
+    }
+    45% {
+        transform: translate(-8px, 3px) rotate(-3deg) scale(0.97);
+        box-shadow: 0 0 0 26px rgba(239, 68, 68, 0), 0 0 45px #dc2626;
+    }
+    65% {
+        transform: translate(6px, -3px) rotate(2deg) scale(0.95);
+    }
+    100% {
+        transform: translate(0, 0) rotate(0deg) scale(1);
+        border-color: #ef4444;
+        box-shadow: 0 0 20px rgba(239, 68, 68, 0.45);
+    }
+}
+
+.seat.knockout-anim .seat-box {
+    animation: seatKnockoutShake 1.15s cubic-bezier(0.22, 1, 0.36, 1);
+    border-color: #ef4444;
+}
+
+@keyframes knockoutStampSlam {
+    0% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(2.4) rotate(-14deg);
+    }
+    22% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(0.94) rotate(-6deg);
+    }
+    35% {
+        transform: translate(-50%, -50%) scale(1.05) rotate(-8deg);
+    }
+    80% {
+        opacity: 1;
+        transform: translate(-50%, -62%) scale(1) rotate(-8deg);
+    }
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -95%) scale(0.85) rotate(-8deg);
+    }
+}
+
+.knockout-stamp {
+    position: absolute;
+    top: 44%;
+    left: 50%;
+    z-index: 35;
+    background: linear-gradient(135deg, #ef4444, #991b1b);
+    color: #fff;
+    border: 2px solid #fecaca;
+    padding: 4px 14px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    white-space: nowrap;
+    box-shadow: 0 0 25px rgba(239, 68, 68, 0.95), 0 8px 20px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+    animation: knockoutStampSlam 2.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 /* Полоска таймера хода внизу карточки игрока */
@@ -1096,9 +1280,21 @@ input[type="number"]:focus,
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
 }
 
-/* БОКОВАЯ ПАНЕЛЬ ЧАТА */
+/* БОКОВАЯ ПАНЕЛЬ ЧАТА И МИНИ-УВЕДОМЛЕНИЯ */
+.chat-unread-badge {
+    background: #ef4444;
+    color: #fff;
+    font-size: 10.5px;
+    font-weight: 800;
+    padding: 1px 6px;
+    border-radius: 999px;
+    margin-left: 3px;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.75);
+}
+
 .sidebar {
     background: var(--bg-panel);
+    backdrop-filter: blur(14px);
     border-left: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
@@ -1106,11 +1302,91 @@ input[type="number"]:focus,
 }
 
 .sidebar-tabs {
-    padding: 12px 14px;
+    padding: 10px 14px;
     border-bottom: 1px solid var(--border-color);
     font-weight: 700;
     font-size: 13px;
     color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.btn-sidebar-close {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #cbd5e1;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.btn-sidebar-close:hover {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: rgba(239, 68, 68, 0.45);
+    color: #fca5a5;
+}
+
+/* Всплывающие мини-уведомления чата при скрытой боковой панели */
+.chat-mini-popups {
+    position: absolute;
+    bottom: 16px;
+    right: 20px;
+    z-index: 45;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 310px;
+    pointer-events: none;
+}
+
+@keyframes chatPopupSlideIn {
+    0% {
+        opacity: 0;
+        transform: translateX(28px) scale(0.92);
+    }
+    100% {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
+}
+
+.chat-mini-popup {
+    pointer-events: auto;
+    cursor: pointer;
+    background: rgba(15, 23, 42, 0.94);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(96, 165, 250, 0.4);
+    border-left: 4px solid #3b82f6;
+    border-radius: 11px;
+    padding: 9px 13px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.7);
+    font-size: 12.5px;
+    color: #f1f5f9;
+    line-height: 1.35;
+    animation: chatPopupSlideIn 0.24s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.chat-mini-popup:hover {
+    transform: translateY(-2px);
+    border-color: #60a5fa;
+}
+
+.chat-mini-popup .popup-author {
+    font-weight: 800;
+    color: #60a5fa;
+    margin-right: 5px;
+}
+
+.chat-mini-popup .popup-hint {
+    display: block;
+    font-size: 10px;
+    color: #94a3b8;
+    margin-top: 3px;
 }
 
 .chat-messages {
@@ -1188,6 +1464,13 @@ input[type="number"]:focus,
     font-size: 16px;
     font-weight: 800;
     color: #34d399;
+    transition: transform 0.25s ease, color 0.25s ease, text-shadow 0.25s ease;
+}
+
+.my-hand-value.combo-upgrade-pulse {
+    transform: scale(1.14);
+    color: #fef08a;
+    text-shadow: 0 0 16px rgba(251, 191, 36, 0.9);
 }
 
 .emoji-bar {

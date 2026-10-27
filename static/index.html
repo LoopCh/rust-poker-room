@@ -157,18 +157,26 @@
                 <button id="open-diag-btn" class="btn btn-media" title="Логи и диагностика камеры/микрофона">
                     🛠 Медиа-лог
                 </button>
+                <button id="toggle-chat-btn" class="btn btn-media active" title="Скрыть или показать чат (при скрытии стол разворачивается на весь экран)">
+                    💬 Чат <span id="chat-unread-badge" class="chat-unread-badge hidden">0</span>
+                </button>
                 <button id="rebuy-btn" class="btn btn-warning btn-sm hidden">🪙 Докупить стек</button>
             </div>
         </header>
 
         <!-- Основная рабочая область -->
-        <main class="table-arena">
+        <main id="table-arena" class="table-arena">
             <div class="poker-table">
                 <div class="table-felt">
                     <div class="felt-inner-ring"></div>
 
+                    <!-- Слой спецэффектов (искры нокаута, конфетти монстр-комбинаций) -->
+                    <div id="fx-particles-layer" class="fx-particles-layer"></div>
+
                     <!-- Центр стола: Банк, Общие карты, Статус, Кнопки старта/показа карт -->
                     <div class="table-center">
+                        <div id="combo-spotlight-banner" class="combo-spotlight-banner hidden"></div>
+
                         <div id="pot-container" class="pot-container">
                             <span class="chip-icon">🪙</span>
                             <span class="pot-label">БАНК</span>
@@ -194,12 +202,16 @@
                         <!-- Генерируется один раз в app.js -->
                     </div>
                 </div>
+
+                <!-- Мини-уведомления чата, когда боковая панель скрыта -->
+                <div id="chat-mini-popups" class="chat-mini-popups"></div>
             </div>
 
             <!-- Боковая панель: лог игры и чат -->
-            <aside class="sidebar">
+            <aside id="sidebar-panel" class="sidebar">
                 <div class="sidebar-tabs">
-                    <span class="sidebar-title">💬 Чат, раздачи и медиа-лог</span>
+                    <span class="sidebar-title">💬 Чат и лог стола</span>
+                    <button type="button" id="close-sidebar-btn" class="btn-sidebar-close" title="Скрыть чат и развернуть стол на весь экран">✕ Скрыть</button>
                 </div>
                 <div id="chat-messages" class="chat-messages"></div>
                 <form id="chat-form" class="chat-form">
